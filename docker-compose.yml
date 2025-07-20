@@ -1,0 +1,20 @@
+services:
+  spider:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./:/app
+    restart: unless-stopped
+    networks:
+      - spider-network
+
+networks:
+  spider-network:
+    driver: bridge
