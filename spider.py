@@ -1,16 +1,30 @@
+import asyncio
 import hashlib
+import os
+import traceback
+from contextlib import asynccontextmanager
+from datetime import datetime
+
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from playwright.async_api import async_playwright
-from datetime import datetime
 from tortoise import Model, fields
 from tortoise.contrib.fastapi import register_tortoise
-from dotenv import load_dotenv
-import asyncio
-import os
+
+from api import init, search
 
 load_dotenv()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init()
+    yield
+
+
 # 初始化FastAPI应用
-app = FastAPI(title="闲鱼商品搜索API", description="支持并发请求的闲鱼商品搜索接口")
+app = FastAPI(title="闲鱼商品搜索API", description="支持并发请求的闲鱼商品搜索接口", lifespan=lifespan)
+
 
 def get_md5(text: str) -> str:
     """返回给定文本的MD5哈希值"""
@@ -110,56 +124,65 @@ async def save_to_db(data_list):
             print(f"保存数据出错: {str(e)}")
     return new_records, new_ids
 
+
+async def handle_data(data: dict):
+    if str(data).find("NoneOfResult") != -1:
+        return []
+    items = data.get("data", {}).get("resultList", [])
+    res = []
+    for item in items:
+        main_data = await safe_get(item, "data", "item", "main", "exContent", default={})
+        click_params = await safe_get(item, "data", "item", "main", "clickParam", "args", default={})
+
+        # 解析商品信息
+        title = await safe_get(main_data, "title", default="未知标题")
+
+        # 价格处理
+        price_parts = await safe_get(main_data, "price", default=[])
+        price = "价格异常"
+        if isinstance(price_parts, list):
+            price = "".join([str(p.get("text", "")) for p in price_parts if isinstance(p, dict)])
+            price = price.replace("当前价", "").strip()
+            if "万" in price:
+                price = f"¥{float(price.replace('¥', '').replace('万', '')) * 10000:.0f}"
+        # 其他字段解析
+        area = await safe_get(main_data, "area", default="地区未知")
+        seller = await safe_get(main_data, "userNickName", default="匿名卖家")
+        raw_link = await safe_get(item, "data", "item", "main", "targetUrl", default="")
+        image_url = await safe_get(main_data, "picUrl", default="")
+
+        res.append({
+            "商品标题": title,
+            "当前售价": price,
+            "发货地区": area,
+            "卖家昵称": seller,
+            "商品链接": raw_link.replace("fleamarket://", "https://www.goofish.com/"),
+            "商品图片链接": f"https:{image_url}" if image_url and not image_url.startswith(
+                "http") else image_url,
+            "发布时间": datetime.fromtimestamp(
+                int(click_params.get("publishTime", 0)) / 1000
+            ).strftime("%Y-%m-%d %H:%M") if click_params.get("publishTime", "").isdigit() else "未知时间"
+        })
+    return res
+
+
 async def scrape_xianyu(keyword: str, max_pages: int = 1):
     """异步爬取闲鱼商品数据"""
     data_list = []
-    
+
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3")
+        browser = await p.chromium.launch(headless=False)
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3")
         page = await context.new_page()
-        
+
         async def on_response(response):
             """处理API响应，解析数据"""
+            nonlocal data_list
             if "h5api.m.goofish.com/h5/mtop.taobao.idlemtopsearch.pc.search" in response.url:
                 try:
                     result_json = await response.json()
-                    items = result_json.get("data", {}).get("resultList", [])
-                    
-                    for item in items:
-                        main_data = await safe_get(item, "data", "item", "main", "exContent", default={})
-                        click_params = await safe_get(item, "data", "item", "main", "clickParam", "args", default={})
-                        
-                        # 解析商品信息
-                        title = await safe_get(main_data, "title", default="未知标题")
-                        
-                        # 价格处理
-                        price_parts = await safe_get(main_data, "price", default=[])
-                        price = "价格异常"
-                        if isinstance(price_parts, list):
-                            price = "".join([str(p.get("text", "")) for p in price_parts if isinstance(p, dict)])
-                            price = price.replace("当前价", "").strip()
-                            if "万" in price:
-                                price = f"¥{float(price.replace('¥', '').replace('万', '')) * 10000:.0f}"
-                        
-                        # 其他字段解析
-                        area = await safe_get(main_data, "area", default="地区未知")
-                        seller = await safe_get(main_data, "userNickName", default="匿名卖家")
-                        raw_link = await safe_get(item, "data", "item", "main", "targetUrl", default="")
-                        image_url = await safe_get(main_data, "picUrl", default="")
-
-                        data_list.append({
-                            "商品标题": title,
-                            "当前售价": price,
-                            "发货地区": area,
-                            "卖家昵称": seller,
-                            "商品链接": raw_link.replace("fleamarket://", "https://www.goofish.com/"),
-                            "商品图片链接": f"https:{image_url}" if image_url and not image_url.startswith("http") else image_url,
-                            "发布时间": datetime.fromtimestamp(
-                                int(click_params.get("publishTime", 0))/1000
-                            ).strftime("%Y-%m-%d %H:%M") if click_params.get("publishTime", "").isdigit() else "未知时间"
-                        })
-                        
+                    data_list = await handle_data(result_json)
                 except Exception as e:
                     print(f"响应处理异常: {str(e)}")
 
@@ -201,8 +224,24 @@ async def scrape_xianyu(keyword: str, max_pages: int = 1):
     
     return data_list
 
-@app.post("/search/", summary="商品搜索接口", 
-         description="接收搜索关键词和页数，返回爬取结果数量、新增记录数量及新增记录的id列表")
+
+async def scrape_xianyu_http(keyword: str, max_pages: int = 1):
+    async def warped_search(page):
+        async with semaphore:
+            return await handle_data(await search(keyword, page))
+
+    semaphore = asyncio.Semaphore(3)
+    res = []
+    tasks = []
+    for page in range(1, max_pages + 1):
+        tasks.append(warped_search(page))
+    for r in await asyncio.gather(*tasks):
+        res.extend(r)
+    return res
+
+
+@app.post("/search/", summary="商品搜索接口",
+          description="接收搜索关键词和页数，返回爬取结果数量、新增记录数量及新增记录的id列表")
 async def search_items(keyword: str, max_pages: int = 1):
     """
     参数：
@@ -211,8 +250,9 @@ async def search_items(keyword: str, max_pages: int = 1):
     """
     try:
         # 执行爬取
-        data_list = await scrape_xianyu(keyword, max_pages)
-        
+        # data_list = await scrape_xianyu(keyword, max_pages)
+        data_list = await scrape_xianyu_http(keyword, max_pages)
+
         # 保存数据并统计新增记录数，同时返回新增记录的id列表
         new_count, new_ids = (0, [])
         if data_list:
@@ -226,6 +266,7 @@ async def search_items(keyword: str, max_pages: int = 1):
             "new_record_ids": new_ids
         }
     except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"爬取失败: {str(e)}")
 
 if __name__ == "__main__":
