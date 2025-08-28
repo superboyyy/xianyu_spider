@@ -30,6 +30,7 @@ def get_md5(text: str) -> str:
     """返回给定文本的MD5哈希值"""
     return hashlib.md5(text.encode("utf-8")).hexdigest()
 
+
 def get_link_unique_key(link: str) -> str:
     """
     截取链接中前1个"&"之前的内容作为唯一标识依据。
@@ -42,6 +43,7 @@ def get_link_unique_key(link: str) -> str:
         return '&'.join(parts[:1])
     else:
         return link
+
 
 # 定义数据库模型，增加 link_hash 字段用于唯一性判断
 class XianyuProduct(Model):
@@ -56,9 +58,10 @@ class XianyuProduct(Model):
     link_hash = fields.CharField(max_length=32, unique=True, description="商品链接哈希")
     image_url = fields.TextField(description="商品图片链接", column_type="MEDIUMTEXT")
     publish_time = fields.DatetimeField(null=True, description="发布时间")
-    
+
     class Meta:
         table = "xianyu_products"
+
 
 # 配置数据库
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -81,6 +84,7 @@ register_tortoise(
     add_exception_handlers=True,
 )
 
+
 async def safe_get(data, *keys, default="暂无"):
     """安全获取嵌套字典值"""
     for key in keys:
@@ -89,6 +93,7 @@ async def safe_get(data, *keys, default="暂无"):
         except (KeyError, TypeError, IndexError):
             return default
     return data
+
 
 async def save_to_db(data_list):
     """
@@ -114,7 +119,7 @@ async def save_to_db(data_list):
                     "link": link,
                     "image_url": item["商品图片链接"],
                     "publish_time": datetime.strptime(item["发布时间"], "%Y-%m-%d %H:%M")
-                        if item["发布时间"] != "未知时间" else None,
+                    if item["发布时间"] != "未知时间" else None,
                 }
             )
             if created:
@@ -191,7 +196,7 @@ async def scrape_xianyu(keyword: str, max_pages: int = 1):
             await page.goto("https://www.goofish.com")
             await page.fill('input[class*="search-input"]', keyword)
             await page.click('button[type="submit"]')
-            
+
             # 如果存在弹窗广告则关闭
             try:
                 await page.wait_for_selector("div[class*='closeIconBg']", timeout=5000)
@@ -199,29 +204,29 @@ async def scrape_xianyu(keyword: str, max_pages: int = 1):
             except:
                 print("未找到广告弹窗，继续执行")
                 pass
-            
+
             await page.click('text=新发布')
             await page.click('text=最新')
-            
+
             # 注册响应监听
             page.on("response", on_response)
-            
+
             # 分页处理
             current_page = 1
             while current_page <= max_pages:
                 print(f"正在处理第 {current_page} 页")
                 await asyncio.sleep(1)  # 等待数据加载
-                
+
                 # 查找下一页按钮
                 next_btn = await page.query_selector("[class*='search-pagination-arrow-right']:not([disabled])")
                 if not next_btn:
                     break
                 await next_btn.click()
                 current_page += 1
-                
+
         finally:
             await browser.close()
-    
+
     return data_list
 
 
@@ -257,7 +262,7 @@ async def search_items(keyword: str, max_pages: int = 1):
         new_count, new_ids = (0, [])
         if data_list:
             new_count, new_ids = await save_to_db(data_list)
-        
+
         return {
             "status": "success",
             "keyword": keyword,
@@ -269,6 +274,8 @@ async def search_items(keyword: str, max_pages: int = 1):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"爬取失败: {str(e)}")
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
