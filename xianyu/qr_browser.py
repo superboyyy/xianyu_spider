@@ -156,7 +156,7 @@ async def _run_browser_verify(session_id: str, *, timeout: int = 180) -> None:
         from playwright.async_api import async_playwright
     except ImportError as exc:
         raise RuntimeError(
-            "未安装 playwright。请执行: pip install playwright && playwright install chromium"
+            "未安装 playwright。请执行: pip install -r requirements.txt && playwright install chromium"
         ) from exc
 
     session = mtop._qr_sessions.get(session_id) or {}
@@ -285,7 +285,7 @@ async def _open_login_context(playwright: Any, profile_dir: str):
     except Exception as exc:
         raise RuntimeError(
             "无法打开本机浏览器。请在有桌面的电脑上运行；优先用已安装的 Chrome，"
-            "或先执行 playwright install chromium。"
+            "或先执行 pip install -r requirements.txt && playwright install chromium。"
             "也可以改用：python spider.py login --cookie"
         ) from exc
 
@@ -307,7 +307,7 @@ async def login_via_official_page(*, timeout: int = 180) -> dict:
         from playwright.async_api import async_playwright
     except ImportError as exc:
         raise RuntimeError(
-            "未安装 playwright。请执行: pip install playwright && playwright install chromium"
+            "未安装 playwright。请执行: pip install -r requirements.txt && playwright install chromium"
         ) from exc
 
     profile_dir = tempfile.mkdtemp(prefix="xianyu-login-")

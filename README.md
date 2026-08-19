@@ -27,6 +27,7 @@
 
 ```bash
 pip install -r requirements.txt
+playwright install chromium   # Playwright 已在 requirements 里；这条只装浏览器内核，只需一次
 ```
 
 `.env` 可选。不配 `DATABASE_URL` 时默认使用 `data/xianyu.sqlite3`。
@@ -45,7 +46,6 @@ python spider.py
 
 ```bash
 # 默认：终端先出登录码；扫码后如果要拍脸，再自动打开 Playwright
-pip install playwright && playwright install chromium
 python spider.py login
 
 # 最稳：系统浏览器登录 https://www.goofish.com 后，F12 复制 Cookie
@@ -75,18 +75,20 @@ RUN_LIVE=1 pytest tests/test_live_search.py
 ## 目录结构
 
 ```
-spider.py                 # 启动入口：python spider.py / python spider.py login
+spider.py                 # python spider.py 启 API；python spider.py login 登录
+requirements.txt          # 含 playwright；另需 playwright install chromium
 xianyu/
   app.py                  # FastAPI 组装
-  cli.py                  # 登录：默认终端出码，核身时再 Playwright / --cookie / --browser
+  cli.py                  # 默认终端出码；要拍脸再开 Playwright；--cookie / --browser
+  qr_browser.py           # Playwright：核身页 / 官方登录页
   mtop.py                 # 闲鱼 mtop HTTP（搜索/登录/IM Token）
   protocol.py             # Cookie 与 IM 推送解析、自动回复匹配
   im_client.py            # IM WebSocket
   im_worker.py            # 监听、自动回复、Webhook/SSE
+  session.py / config.py  # 登录态落盘 data/session.json；默认 SQLite data/xianyu.sqlite3
   models.py / schemas.py  # 数据库与请求体
   routers/                # /search /auth /im
 tests/                    # pytest
-test.py                   # 旧的 Playwright 手工脚本，搜索主路径已不用它
 ```
 
 ## 登录
@@ -96,7 +98,6 @@ test.py                   # 旧的 Playwright 手工脚本，搜索主路径已�
 ### 1. 终端出码，核身再用浏览器（默认）
 
 ```bash
-pip install playwright && playwright install chromium
 python spider.py login
 ```
 
