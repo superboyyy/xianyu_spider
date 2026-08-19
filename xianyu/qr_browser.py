@@ -140,7 +140,18 @@ def _logged_in_from_cookies() -> bool:
     return bool(cookie_user_id(cookies) or has_login_cookies(cookies))
 
 
-async def _run_browser_verify(session_id: str) -> None:
+async def complete_browser_verify(session_id: str, *, timeout: int = 180) -> dict:
+    """同步走完核身窗口：给 CLI 在扫码后需要拍脸时调用。"""
+    await _run_browser_verify(session_id, timeout=timeout)
+    snapshot = mtop.login_snapshot()
+    return snapshot | {"ok": bool(snapshot.get("logged_in"))}
+
+
+async def _run_browser_verify(session_id: str, *, timeout: int = 180) -> None:
+    import shutil
+    import tempfile
+    import time
+
     try:
         from playwright.async_api import async_playwright
     except ImportError as exc:
@@ -151,68 +162,64 @@ async def _run_browser_verify(session_id: str) -> None:
     session = mtop._qr_sessions.get(session_id) or {}
     verify_url = str(session.get("verification_url") or "").strip()
     start_url = verify_url or "https://www.goofish.com/"
-
-    async with async_playwright() as playwright:
-        try:
-            browser = await playwright.chromium.launch(
-                headless=False,
-                args=["--disable-blink-features=AutomationControlled"],
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                "无法打开本机浏览器窗口。请在有桌面的电脑上运行本服务，"
-                "并先执行 playwright install chromium。"
-                "也可以只在闲鱼 App 里完成验证，然后等待本页自动登录。"
-            ) from exc
-        context = await browser.new_context()
-        exported = export_playwright_cookies()
-        if exported:
+    profile_dir = tempfile.mkdtemp(prefix="xianyu-verify-")
+    try:
+        async with async_playwright() as playwright:
+            context = await _open_login_context(playwright, profile_dir)
+            exported = export_playwright_cookies()
+            if exported:
+                try:
+                    await context.add_cookies(exported)
+                except Exception:
+                    pass
+            page = context.pages[0] if context.pages else await context.new_page()
             try:
-                await context.add_cookies(exported)
+                await page.add_init_script(
+                    "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+                )
             except Exception:
                 pass
-        page = await context.new_page()
-        try:
-            await page.goto(start_url, wait_until="domcontentloaded", timeout=30000)
-        except Exception:
             try:
-                await page.goto("https://www.goofish.com/", wait_until="domcontentloaded", timeout=30000)
-            except Exception as exc:
-                await browser.close()
-                raise RuntimeError(f"打开验证页失败: {exc}") from exc
-
-        deadline = 300
-        for _ in range(deadline):
-            if mtop.login_snapshot().get("logged_in"):
-                break
-            try:
-                browser_cookies = await context.cookies()
+                await page.goto(start_url, wait_until="domcontentloaded", timeout=30000)
             except Exception:
-                browser_cookies = []
-            import_playwright_cookies(browser_cookies)
+                try:
+                    await page.goto("https://www.goofish.com/", wait_until="domcontentloaded", timeout=30000)
+                except Exception as exc:
+                    await context.close()
+                    raise RuntimeError(f"打开验证页失败: {exc}") from exc
+
+            deadline = time.monotonic() + max(int(timeout), 30)
+            while time.monotonic() < deadline:
+                try:
+                    browser_cookies = await context.cookies()
+                except Exception:
+                    browser_cookies = []
+                import_playwright_cookies(browser_cookies)
+                try:
+                    apply_from_url = cookies_from_query_url(page.url)
+                    if apply_from_url:
+                        mtop.apply_cookies(apply_from_url)
+                        mtop._promote_cookies_to_goofish()
+                except Exception:
+                    pass
+                if _cookie_list_logged_in(browser_cookies) or await _try_finish_login(session_id):
+                    break
+                if session_id not in mtop._qr_sessions and mtop.login_snapshot().get("logged_in"):
+                    break
+                await asyncio.sleep(1)
+
             try:
-                apply_from_url = cookies_from_query_url(page.url)
-                if apply_from_url:
-                    mtop.apply_cookies(apply_from_url)
-                    mtop._promote_cookies_to_goofish()
+                leftover = await context.cookies()
+                import_playwright_cookies(leftover)
             except Exception:
                 pass
-            if _logged_in_from_cookies() or await _try_finish_login(session_id):
-                break
-            if session_id not in mtop._qr_sessions:
-                break
-            await asyncio.sleep(1)
-
-        try:
-            leftover = await context.cookies()
-            import_playwright_cookies(leftover)
-        except Exception:
-            pass
-        await _try_finish_login(session_id)
-        try:
-            await browser.close()
-        except Exception:
-            pass
+            await _try_finish_login(session_id)
+            try:
+                await context.close()
+            except Exception:
+                pass
+    finally:
+        shutil.rmtree(profile_dir, ignore_errors=True)
 
 
 OFFICIAL_LOGIN_URL = "https://www.goofish.com/login"

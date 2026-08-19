@@ -74,7 +74,7 @@ def test_cli_prints_verification_qr():
     assert "QRVERIFY" in blob
 
 
-def test_cli_face_verify_does_not_print_link_qr():
+def test_cli_face_verify_opens_playwright():
     printed = _Capture()
     polls = iter(
         [
@@ -87,7 +87,6 @@ def test_cli_face_verify_does_not_print_link_qr():
                 "continue_url": "/auth/qr/continue?session_id=s-v",
                 "hint": "拍摄脸部",
             },
-            {"logged_in": True, "user": {"user_id": "7"}},
         ]
     )
 
@@ -97,16 +96,20 @@ def test_cli_face_verify_does_not_print_link_qr():
     async def fake_poll(session_id):
         return next(polls)
 
+    async def fake_verify(session_id, *, timeout=180):
+        assert session_id == "s-v"
+        return {"ok": True, "logged_in": True, "user_id": "7", "user": {"user_id": "7"}}
+
     async def run():
         with (
             patch("xianyu.mtop.init", AsyncMock()),
             patch("xianyu.mtop.login_snapshot", return_value={"logged_in": False}),
             patch("xianyu.mtop.start_qr_login", side_effect=fake_start),
             patch("xianyu.mtop.poll_qr_login", side_effect=fake_poll),
-            patch("xianyu.cli._open_default_browser", return_value=True) as open_browser,
+            patch("xianyu.qr_browser.complete_browser_verify", side_effect=fake_verify) as verify,
         ):
             code = await run_qr_login(poll_interval=0, printer=printed)
-            open_browser.assert_called_with("https://passport.goofish.com/iv/verify.htm")
+            verify.assert_awaited()
             return code
 
     code = asyncio.run(run())
@@ -115,7 +118,8 @@ def test_cli_face_verify_does_not_print_link_qr():
     assert "QRLOGIN" in blob
     assert "拍摄脸部" in blob or "拍脸" in blob
     assert "https://passport.goofish.com/iv/verify.htm" in blob
-    assert "默认浏览器" in blob
+    assert "Playwright" in blob
+    assert "QRVERIFY" not in blob
 
 
 def test_cli_prints_scanned_hint():
@@ -175,13 +179,16 @@ def test_cli_ignores_expired_while_face_verify_pending():
     async def fake_poll(session_id):
         return next(polls)
 
+    async def fake_verify(session_id, *, timeout=180):
+        return {"ok": True, "logged_in": True, "user_id": "8", "user": {"user_id": "8"}}
+
     async def run():
         with (
             patch("xianyu.mtop.init", AsyncMock()),
             patch("xianyu.mtop.login_snapshot", return_value={"logged_in": False}),
             patch("xianyu.mtop.start_qr_login", side_effect=fake_start),
             patch("xianyu.mtop.poll_qr_login", side_effect=fake_poll),
-            patch("xianyu.cli._open_default_browser", return_value=True),
+            patch("xianyu.qr_browser.complete_browser_verify", side_effect=fake_verify),
         ):
             return await run_qr_login(poll_interval=0, printer=printed)
 
@@ -258,3 +265,31 @@ def test_cli_cookie_login_success():
     assert code == 0
     blob = "\n".join(printed.chunks)
     assert "9" in blob
+
+
+def test_cli_default_login_uses_terminal_qr():
+    printed = _Capture()
+
+    async def fake_start():
+        return {"session_id": "s-default", "qr_ascii": "QRLOGIN\n", "qr_content": "x"}
+
+    async def fake_poll(session_id):
+        return {"logged_in": True, "user": {"user_id": "11"}}
+
+    async def run():
+        with (
+            patch("xianyu.mtop.init", AsyncMock()),
+            patch("xianyu.mtop.login_snapshot", return_value={"logged_in": False}),
+            patch("xianyu.mtop.start_qr_login", side_effect=fake_start),
+            patch("xianyu.mtop.poll_qr_login", side_effect=fake_poll),
+        ):
+            from xianyu.cli import run_login
+
+            return await run_login(printer=printed)
+
+    code = asyncio.run(run())
+    assert code == 0
+    blob = "\n".join(printed.chunks)
+    assert "QRLOGIN" in blob
+    assert "11" in blob
+    assert "官方登录页" not in blob

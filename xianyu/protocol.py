@@ -157,8 +157,7 @@ def is_identity_qr_page(url: str) -> bool:
 FACE_VERIFY_HINT = (
     "官方是「拍摄脸部」核身，验证页自己带二维码。"
     "不要扫验证页链接生成的码（手机会再打开同一页，变成套娃）。"
-    "请在电脑用系统默认浏览器打开 verification_url，用闲鱼 App 扫页面里的码并拍脸。"
-    "拍完若跳到 ivCheckLogin.htm 且白屏：把地址栏完整 URL 粘贴到终端回车，或 POST /auth/qr/callback。"
+    "终端登录会自动用 Playwright 打开核身页；请在弹出窗口里扫码并拍脸。"
     "登录二维码变成 expired 是正常的，不要重新生成。"
 )
 

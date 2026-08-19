@@ -51,13 +51,13 @@ def _still_verifying(status: dict[str, Any], kind: str) -> bool:
 
 async def run_login(
     *,
-    mode: str = "browser",
+    mode: str = "qr",
     cookie: str = "",
     poll_interval: float = 2.0,
     timeout: int = 180,
     printer: Optional[Printer] = None,
 ) -> int:
-    """默认打开官方登录页扫码；也支持粘贴 Cookie 或纯 HTTP 画码。"""
+    """默认终端出登录码；需要拍脸时再开 Playwright。也支持 Cookie 或直接开官方登录页。"""
     print_fn: Printer = printer or print
     from xianyu.mtop import init, login_snapshot
 
@@ -67,12 +67,12 @@ async def run_login(
         _emit(print_fn, f"已经登录，user_id={snapshot.get('user_id') or '-'}")
         return 0
 
-    kind = (mode or "browser").strip().lower()
+    kind = (mode or "qr").strip().lower()
     if kind == "cookie":
         return await _run_cookie_login(cookie=cookie, printer=print_fn)
-    if kind == "http":
-        return await run_qr_login(poll_interval=poll_interval, printer=print_fn)
-    return await _run_browser_login(timeout=timeout, printer=print_fn)
+    if kind == "browser":
+        return await _run_browser_login(timeout=timeout, printer=print_fn)
+    return await run_qr_login(poll_interval=poll_interval, timeout=timeout, printer=print_fn)
 
 
 async def _run_browser_login(*, timeout: int, printer: Printer) -> int:
@@ -125,9 +125,10 @@ async def _run_cookie_login(*, cookie: str, printer: Printer) -> int:
 async def run_qr_login(
     *,
     poll_interval: float = 2.0,
+    timeout: int = 180,
     printer: Optional[Printer] = None,
 ) -> int:
-    """纯 HTTP 终端画码（账号常被拍脸拦住，默认请用浏览器扫码）。"""
+    """先画登录码；若官方要拍脸，再弹出 Playwright 完成核身。"""
     print_fn: Printer = printer or print
     from xianyu.mtop import init, login_snapshot, poll_qr_login, start_qr_login, submit_qr_callback
 
@@ -139,8 +140,8 @@ async def run_qr_login(
 
     result = await start_qr_login()
     ascii_qr = str(result.get("qr_ascii") or "") or qr_ascii(str(result.get("qr_content") or ""))
-    _emit(print_fn, "注意：纯 HTTP 画码遇到拍脸经常登不上。推荐先 Ctrl+C，改跑 python spider.py login。")
     _emit(print_fn, "请用闲鱼 App 扫下面的登录二维码，并在手机上点「确认登录」。")
+    _emit(print_fn, "若之后要拍脸/身份验证，会自动打开 Playwright 窗口，在那个窗口里完成即可。")
     _emit(print_fn, ascii_qr, end="" if ascii_qr.endswith("\n") else "\n")
     _emit(print_fn, f"session_id={result.get('session_id')}")
     session_id = str(result.get("session_id") or "")
@@ -148,6 +149,7 @@ async def run_qr_login(
     printed_trace = ""
     last_progress = ""
     stdin_task: Optional[asyncio.Task] = None
+    playwright_tried = False
     try:
         while True:
             status = await poll_qr_login(session_id)
@@ -171,29 +173,39 @@ async def run_qr_login(
 
                     face_verify = is_identity_qr_page(verify_url)
                 if face_verify:
-                    if verify_url != printed_verify:
+                    if not playwright_tried:
                         _emit(print_fn, "")
-                        _emit(print_fn, "官方要「拍摄脸部」。用电脑默认浏览器打开下面链接，扫页面里的码拍脸。")
+                        _emit(print_fn, "官方要「拍摄脸部」。正在用 Playwright 打开核身页，请在弹出窗口里扫码并拍脸。")
                         if verify_url:
                             _emit(print_fn, verify_url)
-                            opened = _open_default_browser(verify_url)
-                            if opened:
-                                _emit(print_fn, "已打开默认浏览器。拍完不要关页面。")
-                        _emit(
-                            print_fn,
-                            "纯 HTTP 换不了拍脸票。请 Ctrl+C，改跑 python spider.py login，在弹出的官方登录页里扫码并拍脸。",
-                        )
-                        _emit(
-                            print_fn,
-                            "或浏览器登录 www.goofish.com 后：python spider.py login --cookie。白屏链接通常换不了登录态。",
-                        )
+                        from xianyu.qr_browser import complete_browser_verify
+
+                        playwright_tried = True
                         printed_verify = verify_url or "face"
-                        if stdin_task is None and _stdin_is_interactive():
-                            stdin_task = asyncio.create_task(_read_stdin_line())
+                        try:
+                            verified = await complete_browser_verify(session_id, timeout=timeout)
+                        except Exception as exc:
+                            _emit(print_fn, f"Playwright 核身失败: {exc}")
+                            if verify_url:
+                                opened = _open_default_browser(verify_url)
+                                if opened:
+                                    _emit(print_fn, "已改为打开系统默认浏览器。拍完不要关页面。")
+                            _emit(print_fn, "备选：python spider.py login --browser 或 --cookie")
+                            if stdin_task is None and _stdin_is_interactive():
+                                stdin_task = asyncio.create_task(_read_stdin_line())
+                        else:
+                            if verified.get("logged_in"):
+                                user = verified.get("user") or login_snapshot()
+                                _emit(print_fn, f"登录成功 user_id={user.get('user_id') or verified.get('user_id') or '-'}")
+                                return 0
+                            _emit(print_fn, verified.get("hint") or "核身窗口已关闭，仍未登录，继续等待。")
+                            _emit(print_fn, "备选：python spider.py login --browser 或 --cookie")
+                            if stdin_task is None and _stdin_is_interactive():
+                                stdin_task = asyncio.create_task(_read_stdin_line())
                     else:
                         _emit(
                             print_fn,
-                            "仍在等待核身。白屏链接换不了票，请改用 python spider.py login。",
+                            "仍在等待核身完成。",
                             end="\r",
                             flush=True,
                         )
