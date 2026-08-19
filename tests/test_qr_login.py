@@ -237,7 +237,8 @@ def test_poll_qr_does_not_fetch_verification_page():
     assert result["status"] == "verification_required"
     assert result["continue_url"].endswith("session_id=s6")
     assert result["verification_url"].endswith("verify.htm")
-    assert result["verification_qr_image_base64"]
-    assert result["verification_qr_ascii"]
+    assert result["face_verify"] is True
+    assert "拍摄脸部" in result["hint"] or "套娃" in result["hint"]
+    assert not result["verification_qr_ascii"]
     assert not any("verify.htm" in item for item in gets)
     mtop.logout()

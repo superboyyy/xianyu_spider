@@ -14,6 +14,8 @@ from xianyu.protocol import (
     cookies_from_query_url,
     dump_cookie_header,
     has_login_cookies,
+    FACE_VERIFY_HINT,
+    is_identity_qr_page,
     is_login_success_url,
     is_qr_confirmed,
     is_risk_verify_url,
@@ -501,21 +503,27 @@ def _verification_qr(session: dict) -> str:
 def _pending_verify_payload(session_id: str, session: dict) -> dict:
     continue_url = f"/auth/qr/continue?session_id={session_id}"
     verify_url = session.get("verification_url") or ""
+    face_verify = is_identity_qr_page(str(verify_url or ""))
     return {
         "session_id": session_id,
         "status": "verification_required",
         "logged_in": False,
+        "face_verify": face_verify,
         "verification_url": verify_url,
-        "verification_qr_image_base64": _verification_qr(session),
-        "verification_qr_ascii": qr_ascii(str(verify_url or "")),
+        "verification_qr_image_base64": "" if face_verify else _verification_qr(session),
+        "verification_qr_ascii": "" if face_verify else qr_ascii(str(verify_url or "")),
         "continue_url": continue_url,
         "cookie_login": "POST /auth/cookie",
         "debug": _login_debug(session),
         "browser_verify": f"POST /auth/qr/browser?session_id={session_id}",
         "hint": (
-            "账号需要手机验证。请用闲鱼 App 内的「扫一扫」扫描 verification_qr_image_base64 "
-            "或打开 continue_url 上的二维码（不要用系统相机），在手机里完成验证，"
-            "然后继续轮询同一个 session_id。不要重新生成登录二维码。"
+            FACE_VERIFY_HINT
+            if face_verify
+            else (
+                "账号需要手机验证。请用闲鱼 App 内的「扫一扫」扫描 verification_qr_image_base64 "
+                "或打开 continue_url 上的二维码（不要用系统相机），在手机里完成验证，"
+                "然后继续轮询同一个 session_id。不要重新生成登录二维码。"
+            )
         ),
     }
 
@@ -864,10 +872,16 @@ async def poll_qr_login(session_id: str) -> dict:
         pending = _pending_verify_payload(session_id, session)
         pending["raw_status"] = raw_status
         pending["qr_status"] = status
-        pending["hint"] = (
-            "请用闲鱼 App 内的「扫一扫」扫描验证二维码（不要用系统相机），在手机里完成验证。"
-            f"当前登录二维码状态是 {status}，不要重新生成登录二维码。"
-        )
+        if pending.get("face_verify"):
+            pending["hint"] = (
+                FACE_VERIFY_HINT
+                + f" 当前登录二维码状态是 {status}，不要重新生成登录二维码。"
+            )
+        else:
+            pending["hint"] = (
+                "请用闲鱼 App 内的「扫一扫」扫描验证二维码（不要用系统相机），在手机里完成验证。"
+                f"当前登录二维码状态是 {status}，不要重新生成登录二维码。"
+            )
         return pending
 
     return {
@@ -886,12 +900,15 @@ def qr_continue_context(session_id: str) -> dict:
     if not session:
         raise KeyError("二维码会话不存在或已过期，请重新生成")
     snapshot = login_snapshot()
+    verify_url = str(session.get("verification_url") or "")
+    face_verify = is_identity_qr_page(verify_url)
     return {
         "session_id": session_id,
         "logged_in": bool(snapshot.get("logged_in") or (session.get("login_result") or {}).get("logged_in")),
-        "verification_url": session.get("verification_url") or "",
-        "verification_qr_image_base64": _verification_qr(session),
-        "verification_qr_ascii": qr_ascii(str(session.get("verification_url") or "")),
+        "face_verify": face_verify,
+        "verification_url": verify_url,
+        "verification_qr_image_base64": "" if face_verify else _verification_qr(session),
+        "verification_qr_ascii": "" if face_verify else qr_ascii(verify_url),
         "user_id": snapshot.get("user_id") or "",
         "status": session.get("status") or "",
         "debug": _login_debug(session),
@@ -904,7 +921,10 @@ def qr_text_for_session(session_id: str) -> str:
     session = _qr_sessions.get(session_id)
     if not session:
         raise KeyError("二维码会话不存在或已过期，请重新生成")
-    content = str(session.get("verification_url") or session.get("code_content") or "").strip()
+    verify_url = str(session.get("verification_url") or "").strip()
+    if is_identity_qr_page(verify_url):
+        return FACE_VERIFY_HINT + "\n" + verify_url + "\n"
+    content = str(verify_url or session.get("code_content") or "").strip()
     text = qr_ascii(content)
     if not text:
         raise KeyError("当前没有可显示的二维码")

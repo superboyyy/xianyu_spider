@@ -108,12 +108,36 @@ def _continue_page_html(ctx: dict) -> str:
     session_js = json.dumps(str(ctx.get("session_id") or ""))
     logged_in = "已登录" if ctx.get("logged_in") else "未登录"
     user_id = escape(str(ctx.get("user_id") or "-"))
+    face_verify = bool(ctx.get("face_verify"))
     qr_b64 = str(ctx.get("verification_qr_image_base64") or "")
-    qr_block = (
-        f'<p><img class="qr" alt="验证二维码" src="data:image/png;base64,{qr_b64}" /></p>'
-        if qr_b64
-        else "<p>还没有验证链接。如果手机上已经弹出验证，直接在闲鱼 App 里完成即可。</p>"
-    )
+    if face_verify:
+        qr_block = f"""
+  <h1>这是「拍摄脸部」核身，不要扫链接码</h1>
+  <p class="left">你扫出来的页面里已经有官方二维码。再用闲鱼去扫「验证页链接」会套娃，手机上还是同一页。</p>
+  <ol class="left">
+    <li>点下面按钮，在<strong>电脑浏览器</strong>打开官方验证页。</li>
+    <li>用闲鱼 App 扫<strong>电脑窗口里</strong>「拍摄脸部」那个码（不要用系统相机）。</li>
+    <li>按提示拍脸。拍完不要关电脑窗口，等它自动跳转。</li>
+  </ol>
+  <p>
+    <a href="{verification_url or '#'}" target="_blank" rel="noopener">打开官方验证页</a>
+    &nbsp;
+    <button id="open-browser" type="button">打开本机浏览器完成验证</button>
+  </p>
+"""
+    elif qr_b64:
+        qr_block = f'''
+  <h1>用闲鱼 App 扫这个验证码</h1>
+  <p><img class="qr" alt="验证二维码" src="data:image/png;base64,{qr_b64}" /></p>
+  <p class="left">打开<strong>闲鱼 App → 扫一扫</strong>扫描上方二维码（不要用系统相机）。</p>
+  <p><button id="open-browser" type="button">打开本机浏览器完成验证</button></p>
+'''
+    else:
+        qr_block = """
+  <h1>手机验证</h1>
+  <p>还没有验证链接。如果手机上已经弹出验证，直接在闲鱼 App 里完成即可。</p>
+  <p><button id="open-browser" type="button">打开本机浏览器完成验证</button></p>
+"""
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -133,17 +157,13 @@ def _continue_page_html(ctx: dict) -> str:
   </style>
 </head>
 <body>
-  <h1>用闲鱼 App 扫这个验证码</h1>
   <p>当前会话 <code>{session_id}</code>：<strong id="login-state">{logged_in}</strong>，user_id={user_id}</p>
   {qr_block}
-  <p class="left">打开<strong>闲鱼 App → 扫一扫</strong>扫描上方二维码（不要用系统相机），在手机里完成验证。完成后本页会自动登录，不用粘贴 Cookie，也不要重新生成登录二维码。</p>
-  <pre id="result">等待扫码验证...</pre>
+  <p class="left">完成后本页会自动登录，不用粘贴 Cookie，也不要重新生成登录二维码。</p>
+  <pre id="result">等待验证...</pre>
   <details>
     <summary>扫不了？其它方式</summary>
     <p>验证链接：<code>{verification_url or "无"}</code></p>
-    <p>
-      <button id="open-browser" type="button">打开本机浏览器完成验证</button>
-    </p>
     <form id="cookie-form">
       <p><label>粘贴 www.goofish.com 的完整 Cookie</label></p>
       <textarea name="cookie" placeholder="unb=...; cookie2=...; sgcookie=...; _m_h5_tk=..."></textarea>

@@ -93,8 +93,9 @@ def test_qr_continue_page_renders_form():
         assert "粘贴" in res.text
         assert "打开本机浏览器" in res.text
         assert "verify.htm" in res.text
-        assert "data:image/png;base64," in res.text
-        assert "用闲鱼 App 扫" in res.text
+        assert "拍摄脸部" in res.text
+        assert "套娃" in res.text or "不要扫" in res.text
+        assert "打开官方验证页" in res.text or "打开本机浏览器" in res.text
     logout()
 
 

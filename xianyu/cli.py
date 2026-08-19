@@ -47,24 +47,60 @@ async def run_qr_login(
                 return 0
             kind = str(status.get("status") or "")
             if kind == "verification_required":
-                verify_ascii = str(status.get("verification_qr_ascii") or "") or qr_ascii(
-                    str(status.get("verification_url") or "")
-                )
-                if verify_ascii and verify_ascii != printed_verify:
-                    _emit(print_fn, "")
-                    _emit(
-                        print_fn,
-                        "需要手机验证。请用闲鱼 App 内的「扫一扫」扫下面这个验证码（不要用系统相机）。",
-                    )
-                    _emit(print_fn, verify_ascii, end="" if verify_ascii.endswith("\n") else "\n")
-                    printed_verify = verify_ascii
+                verify_url = str(status.get("verification_url") or "")
+                face_verify = bool(status.get("face_verify"))
+                if not face_verify:
+                    from xianyu.protocol import is_identity_qr_page
+
+                    face_verify = is_identity_qr_page(verify_url)
+                if face_verify:
+                    if verify_url != printed_verify:
+                        _emit(print_fn, "")
+                        _emit(
+                            print_fn,
+                            "官方要「拍摄脸部」。不要扫验证页链接生成的码，那会在手机上套娃。",
+                        )
+                        _emit(print_fn, "请用闲鱼 App 扫【电脑浏览器窗口里】的二维码，按提示拍脸，拍完不要关窗口。")
+                        if verify_url:
+                            _emit(print_fn, verify_url)
+                        try:
+                            from xianyu.qr_browser import start_browser_verify
+
+                            opened = await start_browser_verify(session_id)
+                            _emit(print_fn, opened.get("hint") or "已尝试打开本机浏览器。")
+                        except Exception as exc:
+                            continue_url = status.get("continue_url") or ""
+                            _emit(
+                                print_fn,
+                                f"无法自动打开浏览器：{exc}。请在电脑打开 {continue_url or 'continue_url'} 后点「打开本机浏览器」。",
+                            )
+                        printed_verify = verify_url or "face"
+                    else:
+                        _emit(
+                            print_fn,
+                            status.get("hint") or "等待拍脸验证...",
+                            end="\r",
+                            flush=True,
+                        )
                 else:
-                    _emit(
-                        print_fn,
-                        status.get("hint") or "等待手机验证...",
-                        end="\r",
-                        flush=True,
+                    verify_ascii = str(status.get("verification_qr_ascii") or "") or qr_ascii(
+                        verify_url
                     )
+                    if verify_ascii and verify_ascii != printed_verify:
+                        _emit(print_fn, "")
+                        _emit(
+                            print_fn,
+                            "需要手机验证。请用闲鱼 App 内的「扫一扫」扫下面这个验证码（不要用系统相机）。",
+                        )
+                        _emit(print_fn, verify_ascii, end="" if verify_ascii.endswith("\n") else "\n")
+                        printed_verify = verify_ascii
+                    else:
+                        _emit(
+                            print_fn,
+                            status.get("hint") or "等待手机验证...",
+                            end="\r",
+                            flush=True,
+                        )
             elif kind in {"expired", "canceled"}:
                 _emit(print_fn, "")
                 _emit(

@@ -4,6 +4,7 @@ from xianyu.protocol import (
     cookies_from_query_url,
     has_login_cookies,
     is_qr_confirmed,
+    is_identity_qr_page,
     is_risk_verify_url,
     normalize_qr_status,
     qr_ascii,
@@ -57,6 +58,7 @@ def test_cookies_from_query_url_and_risk_verify():
     assert cookies["cookie2"] == "c2"
     assert is_risk_verify_url("https://passport.goofish.com/iv/verify.htm") is True
     assert is_risk_verify_url("https://www.goofish.com/") is False
+    assert is_identity_qr_page("https://passport.goofish.com/iv/verify.htm") is True
 
 
 def test_qr_png_base64_from_verify_url():

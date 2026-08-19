@@ -132,6 +132,19 @@ def is_risk_verify_url(url: str) -> bool:
     return bool(text) and any(marker in text for marker in RISK_VERIFY_MARKERS)
 
 
+def is_identity_qr_page(url: str) -> bool:
+    """官方核身页（拍摄脸部）自己带二维码，不能再把页面链接画成码去扫。"""
+    return is_risk_verify_url(url)
+
+
+FACE_VERIFY_HINT = (
+    "官方是「拍摄脸部」核身，验证页自己带二维码。"
+    "不要扫验证页链接生成的码（手机会再打开同一页，变成套娃）。"
+    "请在电脑打开验证页或本机浏览器，用闲鱼 App 扫窗口里的码并拍脸；"
+    "拍完不要关电脑窗口，继续轮询同一个 session_id。"
+)
+
+
 def is_login_success_url(url: str) -> bool:
     text = (url or "").lower()
     if not text or is_risk_verify_url(text):

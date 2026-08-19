@@ -72,3 +72,47 @@ def test_cli_prints_verification_qr():
     blob = "\n".join(printed.chunks)
     assert "QRLOGIN" in blob
     assert "QRVERIFY" in blob
+
+
+def test_cli_face_verify_does_not_print_link_qr():
+    printed = _Capture()
+    polls = iter(
+        [
+            {
+                "logged_in": False,
+                "status": "verification_required",
+                "face_verify": True,
+                "verification_url": "https://passport.goofish.com/iv/verify.htm",
+                "verification_qr_ascii": "",
+                "continue_url": "/auth/qr/continue?session_id=s-v",
+                "hint": "拍摄脸部",
+            },
+            {"logged_in": True, "user": {"user_id": "7"}},
+        ]
+    )
+
+    async def fake_start():
+        return {"session_id": "s-v", "qr_ascii": "QRLOGIN\n"}
+
+    async def fake_poll(session_id):
+        return next(polls)
+
+    async def fake_browser(session_id):
+        return {"hint": "已打开浏览器"}
+
+    async def run():
+        with (
+            patch("xianyu.mtop.init", AsyncMock()),
+            patch("xianyu.mtop.login_snapshot", return_value={"logged_in": False}),
+            patch("xianyu.mtop.start_qr_login", side_effect=fake_start),
+            patch("xianyu.mtop.poll_qr_login", side_effect=fake_poll),
+            patch("xianyu.qr_browser.start_browser_verify", side_effect=fake_browser),
+        ):
+            return await run_qr_login(poll_interval=0, printer=printed)
+
+    code = asyncio.run(run())
+    assert code == 0
+    blob = "\n".join(printed.chunks)
+    assert "QRLOGIN" in blob
+    assert "拍摄脸部" in blob or "拍脸" in blob
+    assert "已打开浏览器" in blob
