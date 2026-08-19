@@ -1,2 +1,9 @@
 xianyu_error.png
 .env
+__pycache__/
+*.pyc
+.pytest_cache/
+xianyu.db
+xianyu.db-shm
+xianyu.db-wal
+*.xlsx
