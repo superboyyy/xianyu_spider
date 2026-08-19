@@ -41,6 +41,39 @@ python spider.py
 
 打开 `http://localhost:8000/docs`。
 
+## 测试
+
+```bash
+pip install pytest
+pytest
+```
+
+当前覆盖：Cookie/签名/自动回复匹配的单元测试，以及不连闲鱼账号的 FastAPI 接口测试。
+
+真实搜索（会请求闲鱼）：
+
+```bash
+RUN_LIVE=1 pytest tests/test_live_search.py
+```
+
+登录、自动回复、IM 收消息需要你自己的 Cookie/扫码，仓库里没有账号，所以没有做成默认 CI。
+
+## 目录结构
+
+```
+spider.py                 # 启动入口：python spider.py
+xianyu/
+  app.py                  # FastAPI 组装
+  mtop.py                 # 闲鱼 mtop HTTP（搜索/登录/IM Token）
+  protocol.py             # Cookie 与 IM 推送解析、自动回复匹配
+  im_client.py            # IM WebSocket
+  im_worker.py            # 监听、自动回复、Webhook/SSE
+  models.py / schemas.py  # 数据库与请求体
+  routers/                # /search /auth /im
+tests/                    # pytest
+test.py                   # 旧的 Playwright 手工脚本，搜索主路径已不用它
+```
+
 ## 登录
 
 浏览器登录 [闲鱼网页版](https://www.goofish.com) 后，从开发者工具复制 Cookie：

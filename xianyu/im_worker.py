@@ -10,8 +10,8 @@ from typing import Optional
 
 import httpx
 
-from im_client import GoofishIMClient
-from im_protocol import is_system_sender, match_auto_reply, render_reply
+from xianyu.im_client import GoofishIMClient
+from xianyu.protocol import is_system_sender, match_auto_reply, render_reply
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ class IMService:
                 await asyncio.sleep(3)
 
     async def _handle_incoming(self, incoming: dict) -> None:
-        from spider import ChatMessage, ReplySetting
+        from xianyu.models import ChatMessage, ReplySetting
 
         text = (incoming.get("text") or "").strip()
         sender_id = incoming.get("sender_id") or ""

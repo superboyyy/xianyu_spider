@@ -13,8 +13,8 @@ from typing import Any, AsyncIterator, Callable, Optional
 
 import websockets
 
-from api import IM_APP_KEY, client, current_cookies, fetch_im_token
-from im_protocol import (
+from xianyu.mtop import IM_APP_KEY, client, current_cookies, fetch_im_token
+from xianyu.protocol import (
     extract_incoming_message,
     generate_mid,
     generate_uuid,
@@ -214,7 +214,7 @@ class GoofishIMClient:
 def dump_cookie_from_client() -> str:
     cookies = current_cookies()
     if cookies:
-        from im_protocol import dump_cookie_header
+        from xianyu.protocol import dump_cookie_header
 
         return dump_cookie_header(cookies)
     header = ""
