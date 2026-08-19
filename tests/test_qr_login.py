@@ -236,5 +236,7 @@ def test_poll_qr_does_not_fetch_verification_page():
     result = asyncio.run(run())
     assert result["status"] == "verification_required"
     assert result["continue_url"].endswith("session_id=s6")
+    assert result["verification_url"].endswith("verify.htm")
+    assert result["verification_qr_image_base64"]
     assert not any("verify.htm" in item for item in gets)
     mtop.logout()

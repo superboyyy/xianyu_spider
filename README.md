@@ -97,9 +97,8 @@ curl 'http://localhost:8000/auth/qr/status?session_id=返回的session_id'
 
 1. 扫码后必须在闲鱼 App 点「确认登录」。接口里的 `SCANED` / `scanned` 只表示已扫码，还不是已登录。
 2. 请轮询 `GET /auth/qr/status?session_id=...` 直到 `logged_in: true`。只刷新 `GET /auth/status` 看不到扫码进度。
-3. 若返回 `verification_required`，打开 `continue_url`（`GET /auth/qr/continue?session_id=...`）看说明。在 **闲鱼 App** 里完成验证后，继续轮询同一个 `session_id`，不要重新 `POST /auth/qr/start`。
-4. 如果你是在电脑浏览器里打开验证页：验证完成后 Cookie 只在浏览器里，**不会自动进本服务**。请打开 [闲鱼网页版](https://www.goofish.com) 复制完整 Cookie，调用 `POST /auth/cookie`，或在说明页的表单里粘贴。
-5. 更稳的方式：网页登录后复制完整 Cookie，直接 `POST /auth/cookie`。
+3. 若返回 `verification_required`：接口会把验证链接画成 `verification_qr_image_base64`。用**闲鱼 App 内的「扫一扫」**扫这个验证二维码（不要用系统相机），在手机里完成验证，然后继续轮询同一个 `session_id`。也可以打开 `continue_url` 看大图。不要重新 `POST /auth/qr/start`。
+4. 扫不了验证码时，再在 continue 页用本机浏览器完成，或把网页 Cookie 贴到 `POST /auth/cookie`。
 
 ## 自动回复与通知
 

@@ -1,9 +1,11 @@
+import json
 from html import escape
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
 from xianyu.im_worker import im_service
+from xianyu import mtop as mtop_mod
 from xianyu.mtop import (
     fetch_login_user,
     login_snapshot,
@@ -13,6 +15,7 @@ from xianyu.mtop import (
     qr_continue_context,
     start_qr_login,
 )
+from xianyu.qr_browser import browser_job, start_browser_verify
 from xianyu.schemas import CookieLoginBody
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -55,6 +58,23 @@ async def auth_qr_continue(session_id: str = Query(..., description="start 接�
     return HTMLResponse(_continue_page_html(ctx))
 
 
+@router.post("/qr/browser", summary="打开本机浏览器完成验证并自动导入 Cookie")
+async def auth_qr_browser(session_id: str = Query(..., description="start 接口返回的 session_id")):
+    try:
+        return await start_browser_verify(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/qr/browser", summary="本机浏览器验证进度")
+async def auth_qr_browser_status(session_id: str = Query(..., description="start 接口返回的 session_id")):
+    if session_id not in mtop_mod._qr_sessions:
+        raise HTTPException(status_code=404, detail="二维码会话不存在或已过期，请重新生成")
+    return browser_job(session_id)
+
+
 @router.get("/status", summary="当前登录态")
 async def auth_status():
     snapshot = login_snapshot()
@@ -76,12 +96,14 @@ async def auth_logout():
 def _continue_page_html(ctx: dict) -> str:
     verification_url = escape(str(ctx.get("verification_url") or ""))
     session_id = escape(str(ctx.get("session_id") or ""))
+    session_js = json.dumps(str(ctx.get("session_id") or ""))
     logged_in = "已登录" if ctx.get("logged_in") else "未登录"
     user_id = escape(str(ctx.get("user_id") or "-"))
-    verify_block = (
-        f'<p><a href="{verification_url}" target="_blank" rel="noopener">打开闲鱼/淘宝验证页</a></p>'
-        if verification_url
-        else "<p>当前没有官方验证链接。如果手机上已经弹出验证，请在 App 里完成。</p>"
+    qr_b64 = str(ctx.get("verification_qr_image_base64") or "")
+    qr_block = (
+        f'<p><img class="qr" alt="验证二维码" src="data:image/png;base64,{qr_b64}" /></p>'
+        if qr_b64
+        else "<p>还没有验证链接。如果手机上已经弹出验证，直接在闲鱼 App 里完成即可。</p>"
     )
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -90,56 +112,77 @@ def _continue_page_html(ctx: dict) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>闲鱼扫码登录 · 手机验证</title>
   <style>
-    body {{ font-family: sans-serif; max-width: 720px; margin: 32px auto; padding: 0 16px; line-height: 1.6; }}
-    textarea {{ width: 100%; min-height: 140px; }}
+    body {{ font-family: sans-serif; max-width: 720px; margin: 32px auto; padding: 0 16px; line-height: 1.6; text-align: center; }}
+    .qr {{ width: 240px; height: 240px; background: #fff; padding: 8px; }}
+    textarea {{ width: 100%; min-height: 120px; }}
+    button {{ font-size: 16px; padding: 8px 16px; }}
     .ok {{ color: #0a7; }}
     .warn {{ color: #c40; }}
     code {{ background: #f4f4f4; padding: 0 4px; }}
+    details {{ margin-top: 24px; text-align: left; }}
+    .left {{ text-align: left; }}
   </style>
 </head>
 <body>
-  <h1>扫码后需要手机验证</h1>
-  <p>当前会话 <code>{session_id}</code>：<strong>{logged_in}</strong>，user_id={user_id}</p>
-  <ol>
-    <li>在闲鱼 App 里完成确认；如果弹出短信/人脸验证，在 <strong>手机上</strong> 做完。</li>
-    <li>不要重新生成二维码，回到本页或继续轮询 <code>GET /auth/qr/status</code>。</li>
-    <li>如果你是在电脑浏览器里打开了验证页：验证完成后的 Cookie 只在浏览器里，<strong>不会自动进本服务</strong>。请打开
-      <a href="https://www.goofish.com/" target="_blank" rel="noopener">www.goofish.com</a>，
-      按 F12 → Network/Application 复制完整 Cookie，粘贴到下面。</li>
-  </ol>
-  {verify_block}
-  <form id="cookie-form">
-    <p><label>粘贴 www.goofish.com 的完整 Cookie</label></p>
-    <textarea name="cookie" placeholder="unb=...; cookie2=...; sgcookie=...; _m_h5_tk=..."></textarea>
-    <p><button type="submit">导入 Cookie 并登录</button></p>
-  </form>
-  <pre id="result"></pre>
+  <h1>用闲鱼 App 扫这个验证码</h1>
+  <p>当前会话 <code>{session_id}</code>：<strong id="login-state">{logged_in}</strong>，user_id={user_id}</p>
+  {qr_block}
+  <p class="left">打开<strong>闲鱼 App → 扫一扫</strong>扫描上方二维码（不要用系统相机），在手机里完成验证。完成后本页会自动登录，不用粘贴 Cookie，也不要重新生成登录二维码。</p>
+  <pre id="result">等待扫码验证...</pre>
+  <details>
+    <summary>扫不了？其它方式</summary>
+    <p>验证链接：<code>{verification_url or "无"}</code></p>
+    <p>
+      <button id="open-browser" type="button">打开本机浏览器完成验证</button>
+    </p>
+    <form id="cookie-form">
+      <p><label>粘贴 www.goofish.com 的完整 Cookie</label></p>
+      <textarea name="cookie" placeholder="unb=...; cookie2=...; sgcookie=...; _m_h5_tk=..."></textarea>
+      <p><button type="submit">导入 Cookie 并登录</button></p>
+    </form>
+  </details>
   <script>
-    const sessionId = {session_id!r};
+    const sessionId = {session_js};
     const form = document.getElementById("cookie-form");
     const result = document.getElementById("result");
+    const loginState = document.getElementById("login-state");
+    const openBtn = document.getElementById("open-browser");
     async function refreshStatus() {{
       const res = await fetch("/auth/qr/status?session_id=" + encodeURIComponent(sessionId));
       const data = await res.json();
       if (data.logged_in) {{
+        loginState.textContent = "已登录";
         result.className = "ok";
         result.textContent = "登录成功: " + JSON.stringify(data, null, 2);
       }}
     }}
-    form.addEventListener("submit", async (event) => {{
-      event.preventDefault();
-      const cookie = form.cookie.value;
-      const res = await fetch("/auth/cookie", {{
-        method: "POST",
-        headers: {{ "Content-Type": "application/json" }},
-        body: JSON.stringify({{ cookie }}),
+    if (openBtn) {{
+      openBtn.addEventListener("click", async () => {{
+        openBtn.disabled = true;
+        result.textContent = "正在打开本机浏览器...";
+        const res = await fetch("/auth/qr/browser?session_id=" + encodeURIComponent(sessionId), {{ method: "POST" }});
+        const data = await res.json();
+        result.className = res.ok ? "ok" : "warn";
+        result.textContent = data.hint || JSON.stringify(data, null, 2);
+        openBtn.disabled = false;
       }});
-      const data = await res.json();
-      result.className = res.ok ? "ok" : "warn";
-      result.textContent = JSON.stringify(data, null, 2);
-    }});
+    }}
+    if (form) {{
+      form.addEventListener("submit", async (event) => {{
+        event.preventDefault();
+        const cookie = form.cookie.value;
+        const res = await fetch("/auth/cookie", {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{ cookie }}),
+        }});
+        const data = await res.json();
+        result.className = res.ok ? "ok" : "warn";
+        result.textContent = JSON.stringify(data, null, 2);
+      }});
+    }}
     refreshStatus();
-    setInterval(refreshStatus, 3000);
+    setInterval(refreshStatus, 2000);
   </script>
 </body>
 </html>

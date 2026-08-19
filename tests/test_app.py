@@ -91,5 +91,36 @@ def test_qr_continue_page_renders_form():
         assert res.status_code == 200
         assert "text/html" in res.headers.get("content-type", "")
         assert "粘贴" in res.text
+        assert "打开本机浏览器" in res.text
         assert "verify.htm" in res.text
+        assert "data:image/png;base64," in res.text
+        assert "用闲鱼 App 扫" in res.text
+    logout()
+
+
+def test_qr_browser_starts_without_launching_chrome(monkeypatch):
+    from xianyu import mtop, qr_browser
+
+    async def fake_run(session_id: str):
+        return None
+
+    monkeypatch.setattr(qr_browser, "_run_browser_verify", fake_run)
+    qr_browser._jobs.clear()
+    logout()
+    mtop._qr_sessions["b1"] = {
+        "t": "1",
+        "ck": "2",
+        "verification_url": "https://passport.goofish.com/iv/verify.htm",
+    }
+    with _client() as client:
+        missing = client.post("/auth/qr/browser", params={"session_id": "missing"})
+        assert missing.status_code == 404
+        res = client.post("/auth/qr/browser", params={"session_id": "b1"})
+        assert res.status_code == 200
+        body = res.json()
+        assert body["ok"] is True
+        assert body["status"] == "running"
+        status = client.get("/auth/qr/browser", params={"session_id": "b1"})
+        assert status.status_code == 200
+        assert status.json()["status"] in {"running", "done", "error"}
     logout()

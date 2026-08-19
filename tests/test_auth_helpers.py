@@ -6,6 +6,7 @@ from xianyu.protocol import (
     is_qr_confirmed,
     is_risk_verify_url,
     normalize_qr_status,
+    qr_png_base64,
     qr_status_hint,
 )
 
@@ -55,3 +56,21 @@ def test_cookies_from_query_url_and_risk_verify():
     assert cookies["cookie2"] == "c2"
     assert is_risk_verify_url("https://passport.goofish.com/iv/verify.htm") is True
     assert is_risk_verify_url("https://www.goofish.com/") is False
+
+
+def test_qr_png_base64_from_verify_url():
+    raw = qr_png_base64("https://passport.goofish.com/iv/verify.htm")
+    assert len(raw) > 100
+    import base64
+
+    assert base64.b64decode(raw)[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_import_playwright_cookies_sets_unb():
+    from xianyu.qr_browser import import_playwright_cookies
+    from xianyu.mtop import login_snapshot, logout
+
+    logout()
+    import_playwright_cookies([{"name": "unb", "value": "42"}])
+    assert login_snapshot()["user_id"] == "42"
+    logout()

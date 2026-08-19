@@ -20,6 +20,7 @@ from xianyu.protocol import (
     normalize_qr_status,
     parse_cookie_header,
     passport_flag,
+    qr_png_base64,
     qr_status_hint,
 )
 from xianyu.config import QR_SESSIONS_PATH
@@ -380,11 +381,12 @@ def _load_qr_sessions() -> None:
 
 def _save_qr_sessions() -> None:
     QR_SESSIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    skip_keys = {"code_content", "verification_qr_image_base64"}
     serializable = {
         session_id: {
             key: value
             for key, value in session.items()
-            if key != "code_content" and not str(key).startswith("_")
+            if key not in skip_keys and not str(key).startswith("_")
         }
         for session_id, session in _qr_sessions.items()
     }
@@ -480,21 +482,38 @@ def _remember_qr_confirm(session: dict, data: dict) -> None:
     _save_qr_sessions()
 
 
+def _verification_qr(session: dict) -> str:
+    url = str(session.get("verification_url") or "").strip()
+    if not url:
+        return ""
+    if session.get("_verification_qr_url") == url:
+        cached = str(session.get("verification_qr_image_base64") or "")
+        if cached:
+            return cached
+    image = qr_png_base64(url)
+    if image:
+        session["_verification_qr_url"] = url
+        session["verification_qr_image_base64"] = image
+    return image
+
+
 def _pending_verify_payload(session_id: str, session: dict) -> dict:
     continue_url = f"/auth/qr/continue?session_id={session_id}"
+    verify_url = session.get("verification_url") or ""
     return {
         "session_id": session_id,
         "status": "verification_required",
         "logged_in": False,
-        "verification_url": session.get("verification_url") or "",
+        "verification_url": verify_url,
+        "verification_qr_image_base64": _verification_qr(session),
         "continue_url": continue_url,
         "cookie_login": "POST /auth/cookie",
         "debug": _login_debug(session),
+        "browser_verify": f"POST /auth/qr/browser?session_id={session_id}",
         "hint": (
-            "账号需要手机验证。请打开 continue_url 查看说明，或在闲鱼 App 内完成验证。"
-            "验证是在你的浏览器/手机里完成的，Cookie 不会自动进本服务。"
-            "验证后请继续轮询同一个 session_id；若仍未登录，把 www.goofish.com 的 Cookie "
-            "粘贴到 POST /auth/cookie。不要重新生成二维码。"
+            "账号需要手机验证。请用闲鱼 App 内的「扫一扫」扫描 verification_qr_image_base64 "
+            "或打开 continue_url 上的二维码（不要用系统相机），在手机里完成验证，"
+            "然后继续轮询同一个 session_id。不要重新生成登录二维码。"
         ),
     }
 
@@ -727,19 +746,7 @@ async def start_qr_login() -> dict:
         "code_content": code_content,
     }
     _save_qr_sessions()
-    qr_image = ""
-    try:
-        import io
-        import qrcode
-
-        image = qrcode.make(_qr_sessions[session_id]["code_content"])
-        buffer = io.BytesIO()
-        image.save(buffer, format="PNG")
-        import base64
-
-        qr_image = base64.b64encode(buffer.getvalue()).decode("ascii")
-    except Exception:
-        qr_image = ""
+    qr_image = qr_png_base64(_qr_sessions[session_id]["code_content"])
     return {
         "session_id": session_id,
         "status": "NEW",
@@ -854,9 +861,8 @@ async def poll_qr_login(session_id: str) -> dict:
         pending["raw_status"] = raw_status
         pending["qr_status"] = status
         pending["hint"] = (
-            "手机验证完成后请继续轮询本接口，不要重新生成二维码。"
-            "当前二维码状态是 "
-            f"{status}，服务会用确认时保存的 token 换登录态。"
+            "请用闲鱼 App 内的「扫一扫」扫描验证二维码（不要用系统相机），在手机里完成验证。"
+            f"当前登录二维码状态是 {status}，不要重新生成登录二维码。"
         )
         return pending
 
@@ -870,6 +876,8 @@ async def poll_qr_login(session_id: str) -> dict:
 
 
 def qr_continue_context(session_id: str) -> dict:
+    from xianyu.qr_browser import browser_job
+
     session = _qr_sessions.get(session_id)
     if not session:
         raise KeyError("二维码会话不存在或已过期，请重新生成")
@@ -878,9 +886,11 @@ def qr_continue_context(session_id: str) -> dict:
         "session_id": session_id,
         "logged_in": bool(snapshot.get("logged_in") or (session.get("login_result") or {}).get("logged_in")),
         "verification_url": session.get("verification_url") or "",
+        "verification_qr_image_base64": _verification_qr(session),
         "user_id": snapshot.get("user_id") or "",
         "status": session.get("status") or "",
         "debug": _login_debug(session),
+        "browser_job": browser_job(session_id),
     }
 
 

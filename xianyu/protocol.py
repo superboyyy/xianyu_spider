@@ -213,6 +213,30 @@ def qr_status_hint(status: str) -> str:
     return hints.get(mapped, f"当前状态: {mapped}")
 
 
+def qr_png_base64(content: str) -> str:
+    """把任意文本（登录码或验证链接）画成 PNG 二维码。"""
+    text = (content or "").strip()
+    if not text:
+        return ""
+    try:
+        import io
+        import qrcode
+
+        qr = qrcode.QRCode(
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=8,
+            border=2,
+        )
+        qr.add_data(text)
+        qr.make(fit=True)
+        image = qr.make_image(fill_color="black", back_color="white")
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        return base64.b64encode(buffer.getvalue()).decode("ascii")
+    except Exception:
+        return ""
+
+
 def build_device_id(user_id: str) -> str:
     uid = user_id or "0"
     return f"{uuid.uuid4()}-{uid}"
