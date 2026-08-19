@@ -35,14 +35,64 @@ def dump_cookie_header(cookies: dict[str, str]) -> str:
     return "; ".join(f"{name}={value}" for name, value in cookies.items() if name)
 
 
+LOGIN_COOKIE_NAMES = ("sgcookie", "csg", "lgc", "havana-lgc0", "havana-lgc1")
+
+
 def cookie_user_id(cookies: dict[str, str]) -> str:
-    return (
-        cookies.get("unb")
-        or cookies.get("unb")
-        or cookies.get("userid")
-        or cookies.get("user_id")
-        or ""
-    )
+    for key in ("unb", "userid", "user_id", "uid"):
+        value = str(cookies.get(key) or "").strip()
+        if value:
+            return value
+    sn = str(cookies.get("sn") or "").strip()
+    if sn.isdigit():
+        return sn
+    return ""
+
+
+def has_login_cookies(cookies: dict[str, str]) -> bool:
+    """判断 jar 里是否已有闲鱼登录态（不只看 unb）。"""
+    if cookie_user_id(cookies):
+        return True
+    return any(str(cookies.get(name) or "").strip() for name in LOGIN_COOKIE_NAMES)
+
+
+def normalize_qr_status(status: str) -> str:
+    """闲鱼官方状态是 NEW / SCANED（一个 N）/ CONFIRMED / EXPIRED / CANCELED。"""
+    raw = (status or "").strip()
+    key = raw.upper().replace("-", "_")
+    mapping = {
+        "NEW": "new",
+        "WAIT": "new",
+        "WAITING": "new",
+        "SCAN": "scanned",
+        "SCANED": "scanned",
+        "SCANNED": "scanned",
+        "CONFIRMED": "confirmed",
+        "SUCCESS": "confirmed",
+        "PASSED": "confirmed",
+        "OK": "confirmed",
+        "EXPIRED": "expired",
+        "EXPIRE": "expired",
+        "CANCELED": "canceled",
+        "CANCELLED": "canceled",
+    }
+    return mapping.get(key, raw.lower() or "new")
+
+
+def is_qr_confirmed(status: str) -> bool:
+    return normalize_qr_status(status) == "confirmed"
+
+
+def qr_status_hint(status: str) -> str:
+    mapped = normalize_qr_status(status)
+    hints = {
+        "new": "等待扫描，请用闲鱼 App 扫码。",
+        "scanned": "已扫码，请在闲鱼 App 里点「确认登录」。只扫码不会登录。",
+        "confirmed": "已在 App 确认，正在换取登录 Cookie。",
+        "expired": "二维码已过期，请重新调用 POST /auth/qr/start。",
+        "canceled": "已取消登录，请重新生成二维码。",
+    }
+    return hints.get(mapped, f"当前状态: {mapped}")
 
 
 def build_device_id(user_id: str) -> str:

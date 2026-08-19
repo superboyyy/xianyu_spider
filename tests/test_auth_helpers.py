@@ -1,4 +1,11 @@
 from api import generate_sign, login_snapshot, apply_cookies, current_cookies, logout
+from xianyu.protocol import (
+    cookie_user_id,
+    has_login_cookies,
+    is_qr_confirmed,
+    normalize_qr_status,
+    qr_status_hint,
+)
 
 
 def test_generate_sign_stable():
@@ -17,3 +24,19 @@ def test_cookie_login_snapshot_without_network():
     assert snap["user_id"] == "2048"
     logout()
     assert login_snapshot()["logged_in"] is False
+
+
+def test_normalize_qr_status_scaned_is_not_confirmed():
+    assert normalize_qr_status("SCANED") == "scanned"
+    assert normalize_qr_status("SCANNED") == "scanned"
+    assert is_qr_confirmed("SCANED") is False
+    assert is_qr_confirmed("CONFIRMED") is True
+    assert "确认" in qr_status_hint("SCANED")
+
+
+def test_cookie_user_id_and_login_cookies():
+    assert cookie_user_id({"unb": "9"}) == "9"
+    assert cookie_user_id({"sn": "12345"}) == "12345"
+    assert cookie_user_id({"sn": "nick"}) == ""
+    assert has_login_cookies({"sgcookie": "x"}) is True
+    assert has_login_cookies({"cookie2": "x"}) is False
