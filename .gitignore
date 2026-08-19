@@ -1,2 +1,11 @@
 xianyu_error.png
 .env
+data/session.json
+data/session.json
+data/qr_sessions.json
+data/login_trace.jsonl
+data/*.sqlite3
+__pycache__/
+.pytest_cache/
+*.pyc
+
