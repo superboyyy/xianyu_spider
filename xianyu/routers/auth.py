@@ -13,6 +13,7 @@ from xianyu.mtop import (
     logout,
     poll_qr_login,
     qr_continue_context,
+    qr_login_trace,
     qr_text_for_session,
     start_qr_login,
 )
@@ -54,6 +55,14 @@ async def auth_qr_status(session_id: str = Query(..., description="start 接口�
 async def auth_qr_text(session_id: str = Query(..., description="start 接口返回的 session_id")):
     try:
         return PlainTextResponse(qr_text_for_session(session_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/qr/trace", summary="扫码换票追踪（不含 Cookie 明文）")
+async def auth_qr_trace(session_id: str = Query(..., description="start 接口返回的 session_id")):
+    try:
+        return qr_login_trace(session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

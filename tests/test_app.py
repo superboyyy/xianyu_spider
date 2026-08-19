@@ -144,3 +144,22 @@ def test_qr_text_endpoint_prints_ascii():
         assert len(res.text) > 50
     logout()
 
+
+def test_qr_trace_endpoint_returns_events():
+    from xianyu import mtop
+
+    logout()
+    missing_client = _client()
+    with missing_client as client:
+        missing = client.get("/auth/qr/trace", params={"session_id": "missing"})
+        assert missing.status_code == 404
+    mtop._qr_sessions["tr1"] = {"t": "1", "ck": "2"}
+    with _client() as client:
+        res = client.get("/auth/qr/trace", params={"session_id": "tr1"})
+        assert res.status_code == 200
+        body = res.json()
+        assert body["session_id"] == "tr1"
+        assert "events" in body
+        assert "debug" in body
+    logout()
+

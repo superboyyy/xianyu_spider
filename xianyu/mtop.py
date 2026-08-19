@@ -27,6 +27,7 @@ from xianyu.protocol import (
     qr_status_hint,
 )
 from xianyu.config import QR_SESSIONS_PATH
+from xianyu.login_trace import append_event, format_trace_line, last_event, summarize_passport
 from xianyu.session import load_session, save_session, clear_session
 
 BASE_URL = "https://h5api.m.goofish.com/h5/{}/1.0/"
@@ -438,11 +439,15 @@ def _needs_phone_verify(data: dict) -> bool:
 
 def _login_debug(session: Optional[dict] = None) -> dict:
     cookies = current_cookies()
+    last = last_event(session)
     info = {
         "cookie_names": sorted(cookies.keys()),
         "has_user_id": bool(cookie_user_id(cookies)),
         "has_login_token": bool((session or {}).get("login_token")),
         "async_url_count": len((session or {}).get("async_urls") or []),
+        "last_trace": last,
+        "last_trace_line": format_trace_line(last),
+        "trace_file": "data/login_trace.jsonl",
     }
     return info
 
@@ -582,9 +587,10 @@ async def _absorb_passport_data(data: dict, session: Optional[dict] = None) -> N
     await _fetch_cookie_urls(urls)
 
 
-async def _exchange_login_token(session: dict) -> None:
+async def _exchange_login_token(session: dict, session_id: str = "") -> None:
     token = session.get("login_token")
     if not token:
+        append_event(session_id or "-", "exchange_skipped_no_token", session)
         await _absorb_passport_data({}, session)
         return
     attempts = (
@@ -609,6 +615,7 @@ async def _exchange_login_token(session: dict) -> None:
         ),
     )
     for path, params in attempts:
+        before = set(current_cookies())
         try:
             response = await client.post(
                 f"{PASSPORT_BASE}{path}",
@@ -624,9 +631,27 @@ async def _exchange_login_token(session: dict) -> None:
                 body = {}
             data = ((body.get("content") or {}).get("data")) or body.get("data") or {}
             await _absorb_passport_data(data, session)
+            after = set(current_cookies())
+            append_event(
+                session_id or "-",
+                "exchange_attempt",
+                session,
+                path=path,
+                http_status=response.status_code,
+                new_cookies=sorted(after - before),
+                passport=summarize_passport(data),
+                still_needs_verify=_needs_phone_verify(data),
+            )
             if _needs_phone_verify(data):
                 _remember_qr_confirm(session, data)
-        except Exception:
+        except Exception as exc:
+            append_event(
+                session_id or "-",
+                "exchange_error",
+                session,
+                path=path,
+                error=str(exc)[:200],
+            )
             continue
     try:
         has_login = await client.post(
@@ -637,14 +662,21 @@ async def _exchange_login_token(session: dict) -> None:
             follow_redirects=True,
         )
         _ingest_response_cookies(has_login)
-    except Exception:
-        pass
+        append_event(
+            session_id or "-",
+            "has_login",
+            session,
+            http_status=has_login.status_code,
+            cookie_names=sorted(current_cookies().keys()),
+        )
+    except Exception as exc:
+        append_event(session_id or "-", "has_login_error", session, error=str(exc)[:200])
     _promote_cookies_to_goofish()
 
 
 async def _complete_qr_login(session: dict, session_id: str) -> Optional[dict]:
     await _absorb_passport_data({}, session)
-    await _exchange_login_token(session)
+    await _exchange_login_token(session, session_id)
     try:
         await init_h5tk()
     except Exception:
@@ -679,6 +711,12 @@ async def _complete_qr_login(session: dict, session_id: str) -> Optional[dict]:
             session["verification_pending"] = False
             _save_qr_sessions()
             return result
+        append_event(
+            session_id,
+            "exchange_no_login",
+            session,
+            error=str(exc)[:200],
+        )
         return None
 
 
@@ -840,6 +878,17 @@ async def poll_qr_login(session_id: str) -> dict:
     )
     status = normalize_qr_status(str(raw_status))
     session["status"] = status
+    fingerprint = f"{status}|{bool(session.get('login_token'))}|{bool(session.get('verification_pending'))}"
+    if session.get("_qr_fp") != fingerprint:
+        session["_qr_fp"] = fingerprint
+        append_event(
+            session_id,
+            "qr_query",
+            session,
+            qr_status=status,
+            raw_status=str(raw_status),
+            passport=summarize_passport(data),
+        )
     if is_qr_confirmed(raw_status):
         _remember_qr_confirm(session, data)
         await _absorb_passport_data(data, session)
@@ -929,6 +978,22 @@ def qr_text_for_session(session_id: str) -> str:
     if not text:
         raise KeyError("当前没有可显示的二维码")
     return text
+
+
+def qr_login_trace(session_id: str) -> dict:
+    """给排查用的换票追踪，不含 Cookie 值和 token 明文。"""
+    from xianyu.login_trace import recent_events
+
+    session = _qr_sessions.get(session_id)
+    if not session:
+        raise KeyError("二维码会话不存在或已过期，请重新生成")
+    snapshot = login_snapshot()
+    return {
+        "session_id": session_id,
+        "logged_in": bool(snapshot.get("logged_in")),
+        "debug": _login_debug(session),
+        "events": recent_events(session_id),
+    }
 
 
 async def search(keyword: str, page: int = 1):

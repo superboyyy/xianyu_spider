@@ -50,9 +50,14 @@ async def run_qr_login(
     _emit(print_fn, f"session_id={result.get('session_id')}")
     session_id = str(result.get("session_id") or "")
     printed_verify = ""
+    printed_trace = ""
     try:
         while True:
             status = await poll_qr_login(session_id)
+            line = str((status.get("debug") or {}).get("last_trace_line") or "")
+            if line and line != printed_trace:
+                _emit(print_fn, "追踪: " + line)
+                printed_trace = line
             if status.get("logged_in"):
                 user = status.get("user") or login_snapshot()
                 _emit(print_fn, "")
