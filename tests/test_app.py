@@ -72,3 +72,24 @@ def test_login_snapshot_via_cookies_without_goofish():
         assert res.json()["logged_in"] is True
         assert res.json()["user_id"] == "777"
     logout()
+
+
+def test_qr_continue_page_renders_form():
+    from xianyu import mtop
+
+    logout()
+    mtop._qr_sessions["cont1"] = {
+        "t": "1",
+        "ck": "2",
+        "verification_url": "https://passport.goofish.com/iv/verify.htm",
+        "verification_pending": True,
+    }
+    with _client() as client:
+        missing = client.get("/auth/qr/continue", params={"session_id": "missing"})
+        assert missing.status_code == 404
+        res = client.get("/auth/qr/continue", params={"session_id": "cont1"})
+        assert res.status_code == 200
+        assert "text/html" in res.headers.get("content-type", "")
+        assert "粘贴" in res.text
+        assert "verify.htm" in res.text
+    logout()

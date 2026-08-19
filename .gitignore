@@ -2,6 +2,7 @@ xianyu_error.png
 .env
 data/session.json
 data/session.json
+data/qr_sessions.json
 data/*.sqlite3
 __pycache__/
 .pytest_cache/

@@ -12,6 +12,7 @@ import re
 import time
 import uuid
 from typing import Any, Optional
+from urllib.parse import parse_qsl, unquote, urlparse
 
 
 def parse_cookie_header(cookie: str) -> dict[str, str]:
@@ -35,11 +36,59 @@ def dump_cookie_header(cookies: dict[str, str]) -> str:
     return "; ".join(f"{name}={value}" for name, value in cookies.items() if name)
 
 
-LOGIN_COOKIE_NAMES = ("sgcookie", "csg", "lgc", "havana-lgc0", "havana-lgc1")
+LOGIN_COOKIE_NAMES = (
+    "sgcookie",
+    "sgcookie",
+    "csg",
+    "lgc",
+    "havana-lgc0",
+    "havana-lgc1",
+)
+
+COOKIE_QUERY_ALIAS = {
+    "unb": "unb",
+    "unb": "unb",
+    "uid": "unb",
+    "userid": "unb",
+    "cookie2": "cookie2",
+    "cookie2": "cookie2",
+    "cookie1": "cookie1",
+    "sgcookie": "sgcookie",
+    "sgcookie": "sgcookie",
+    "_tb_token_": "_tb_token_",
+    "tracknick": "tracknick",
+    "_nk_": "_nk_",
+    "csg": "csg",
+    "lgc": "lgc",
+    "havana-lgc0": "havana-lgc0",
+    "havana-lgc1": "havana-lgc1",
+    "cookie17": "cookie17",
+    "wk_cookie2": "wk_cookie2",
+    "wk_unb": "wk_unb",
+    "_m_h5_tk": "_m_h5_tk",
+    "_m_h5_tk_enc": "_m_h5_tk_enc",
+    "sn": "sn",
+}
+
+RISK_VERIFY_MARKERS = (
+    "havana",
+    "/iv/",
+    "/iv?",
+    "verify.htm",
+    "verify.html",
+    "/verify",
+    "punish",
+    "h5_verify",
+    "identity",
+    "aq.taobao",
+    "baxia",
+    "dialog/view",
+    "risk",
+)
 
 
 def cookie_user_id(cookies: dict[str, str]) -> str:
-    for key in ("unb", "userid", "user_id", "uid"):
+    for key in ("unb", "unb", "userid", "user_id", "uid"):
         value = str(cookies.get(key) or "").strip()
         if value:
             return value
@@ -54,6 +103,75 @@ def has_login_cookies(cookies: dict[str, str]) -> bool:
     if cookie_user_id(cookies):
         return True
     return any(str(cookies.get(name) or "").strip() for name in LOGIN_COOKIE_NAMES)
+
+
+def cookies_from_query_url(url: str) -> dict[str, str]:
+    """从 passport 异步种 Cookie 的 URL query 里抽出登录 Cookie。"""
+    if not url or not isinstance(url, str):
+        return {}
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return {}
+    pairs = list(parse_qsl(parsed.query, keep_blank_values=False))
+    fragment = parsed.fragment or ""
+    if "=" in fragment:
+        if "?" in fragment:
+            fragment = fragment.split("?", 1)[1]
+        pairs.extend(parse_qsl(fragment, keep_blank_values=False))
+    result: dict[str, str] = {}
+    for name, value in pairs:
+        mapped = COOKIE_QUERY_ALIAS.get(name) or COOKIE_QUERY_ALIAS.get(name.lower())
+        if mapped and value:
+            result[mapped] = unquote(value)
+    return result
+
+
+def is_risk_verify_url(url: str) -> bool:
+    text = (url or "").lower()
+    return bool(text) and any(marker in text for marker in RISK_VERIFY_MARKERS)
+
+
+def is_login_success_url(url: str) -> bool:
+    text = (url or "").lower()
+    if not text or is_risk_verify_url(text):
+        return False
+    return any(host in text for host in ("goofish.com", "taobao.com", "tmall.com", "alipay.com"))
+
+
+def collect_async_urls(data: dict) -> list[str]:
+    """收集官方用来同步种 Cookie 的 asyncUrls / st 地址。"""
+    urls: list[str] = []
+    if not isinstance(data, dict):
+        return urls
+    for key, val in data.items():
+        compact = str(key).replace("_", "").lower()
+        if compact not in {"asyncurls", "sturl", "sturls", "syncurls"}:
+            continue
+        candidates = val if isinstance(val, list) else [val]
+        for item in candidates:
+            text = str(item or "").strip()
+            if text.startswith("http"):
+                urls.append(text)
+    seen: set[str] = set()
+    unique: list[str] = []
+    for url in urls:
+        if url not in seen:
+            seen.add(url)
+            unique.append(url)
+    return unique
+
+
+def passport_flag(data: dict, *names: str) -> Any:
+    """按字段名大小写不敏感取值。"""
+    if not isinstance(data, dict):
+        return None
+    lowered = {str(key).lower(): value for key, value in data.items()}
+    for name in names:
+        value = lowered.get(name.lower())
+        if value not in (None, ""):
+            return value
+    return None
 
 
 def normalize_qr_status(status: str) -> str:
