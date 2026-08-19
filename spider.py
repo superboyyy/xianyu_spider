@@ -28,6 +28,28 @@ class SearchRequest(BaseModel):
     max_pages: int = Field(1, ge=1, le=20, description="最大爬取页数")
 
 
+def format_product_item(
+    item: Dict[str, Any],
+    product_id: Optional[int] = None,
+    is_new: bool = False,
+) -> Dict[str, Any]:
+    """把爬取结果转成接口返回的商品明细。"""
+    publish_time = item.get("发布时间")
+    if publish_time == "未知时间":
+        publish_time = None
+    return {
+        "id": product_id,
+        "title": item.get("商品标题"),
+        "price": item.get("当前售价"),
+        "area": item.get("发货地区"),
+        "seller": item.get("卖家昵称"),
+        "link": item.get("商品链接"),
+        "image_url": item.get("商品图片链接"),
+        "publish_time": publish_time,
+        "is_new": is_new,
+    }
+
+
 def get_md5(text: str) -> str:
     """返回给定文本的MD5哈希值"""
     return hashlib.md5(text.encode("utf-8")).hexdigest()
@@ -113,11 +135,16 @@ register_tortoise(
 )
 
 
-async def save_to_db(data_list: List[Dict[str, Any]]) -> Tuple[int, List[int]]:
-    """逐条保存数据到数据库，按链接哈希去重。"""
+async def save_to_db(
+    data_list: List[Dict[str, Any]],
+) -> Tuple[int, List[int], List[Dict[str, Any]]]:
+    """逐条保存数据到数据库，按链接哈希去重，并返回带 id 的商品明细。"""
     new_records = 0
     new_ids: List[int] = []
+    items: List[Dict[str, Any]] = []
     for item in data_list:
+        product_id: Optional[int] = None
+        created = False
         try:
             link = item["商品链接"]
             unique_part = get_link_unique_key(link)
@@ -138,12 +165,14 @@ async def save_to_db(data_list: List[Dict[str, Any]]) -> Tuple[int, List[int]]:
                     ),
                 },
             )
+            product_id = product.id
             if created:
                 new_records += 1
                 new_ids.append(product.id)
         except Exception as e:
             print(f"保存数据出错: {str(e)}")
-    return new_records, new_ids
+        items.append(format_product_item(item, product_id=product_id, is_new=created))
+    return new_records, new_ids, items
 
 
 async def dismiss_blocking_modals(page: Page, timeout_ms: int = 2000) -> None:
@@ -268,20 +297,21 @@ async def health() -> Dict[str, str]:
 @app.post(
     "/search/",
     summary="商品搜索接口",
-    description="接收搜索关键词和页数，返回爬取结果数量、新增记录数量及新增记录的id列表",
+    description="接收搜索关键词和页数，返回商品明细、爬取结果数量、新增记录数量及新增记录的id列表",
 )
 async def search_items(payload: SearchRequest):
     try:
         data_list = await scrape_xianyu(payload.keyword, payload.max_pages)
-        new_count, new_ids = (0, [])
+        new_count, new_ids, items = (0, [], [])
         if data_list:
-            new_count, new_ids = await save_to_db(data_list)
+            new_count, new_ids, items = await save_to_db(data_list)
         return {
             "status": "success",
             "keyword": payload.keyword,
             "total_results": len(data_list),
             "new_records": new_count,
             "new_record_ids": new_ids,
+            "items": items,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"爬取失败: {str(e)}")

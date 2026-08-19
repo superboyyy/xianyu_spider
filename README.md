@@ -11,7 +11,7 @@
 - ⚡ 异步高性能爬取（Playwright 无头浏览器）
 - 🛡️ 智能数据去重（基于链接特征哈希值）
 - 💾 数据持久化存储（默认 SQLite，可选 MySQL）
-- 📊 返回新增记录统计信息
+- 📊 返回商品明细和新增记录统计信息
 
 ## 技术栈
 
@@ -72,9 +72,24 @@ POST /search/
   "keyword": "手机",
   "total_results": 30,
   "new_records": 5,
-  "new_record_ids": [101,102,103,104,105]
+  "new_record_ids": [101,102,103,104,105],
+  "items": [
+    {
+      "id": 101,
+      "title": "iPhone 14 Pro 128G 黑色",
+      "price": "¥2499",
+      "area": "广东",
+      "seller": "示例卖家",
+      "link": "https://www.goofish.com/item?id=123",
+      "image_url": "https://img.alicdn.com/example.jpg",
+      "publish_time": "2026-08-18 15:00",
+      "is_new": true
+    }
+  ]
 }
 ```
+
+`items` 是本次搜到的全部商品明细。`id` 为数据库主键；`is_new` 为 `true` 表示这次新写入，`false` 表示库里已有相同链接。发布时间未知时 `publish_time` 为 `null`。
 
 ## 使用示例
 
