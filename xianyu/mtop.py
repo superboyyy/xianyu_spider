@@ -1,9 +1,11 @@
 import json
 import random
+import re
 import string
 import time
 import uuid
 from typing import Optional, Any, Literal, Callable
+from urllib.parse import parse_qsl, urlparse
 import httpx
 from pydantic import BaseModel
 from pydantic.main import IncEx
@@ -16,6 +18,7 @@ from xianyu.protocol import (
     has_login_cookies,
     FACE_VERIFY_HINT,
     is_identity_qr_page,
+    is_iv_check_login_url,
     is_login_success_url,
     is_qr_confirmed,
     is_risk_verify_url,
@@ -448,8 +451,36 @@ def _login_debug(session: Optional[dict] = None) -> dict:
         "last_trace": last,
         "last_trace_line": format_trace_line(last),
         "trace_file": "data/login_trace.jsonl",
+        "has_havana_iv_token": bool((session or {}).get("havana_iv_token")),
     }
     return info
+
+
+def _store_iv_callback(session: dict, url: str) -> None:
+    text = str(url or "").strip()
+    if not is_iv_check_login_url(text):
+        return
+    session["callback_url"] = text
+    try:
+        query = dict(parse_qsl(urlparse(text).query, keep_blank_values=True))
+    except Exception:
+        query = {}
+    token = str(query.get("havana_iv_token") or query.get("havanaIvToken") or "").strip()
+    if token:
+        session["havana_iv_token"] = token
+
+
+def _js_redirect_urls(html: str) -> list[str]:
+    text = html or ""
+    found: list[str] = []
+    for pattern in (
+        r"location(?:\.href)?\s*=\s*['\"](https?://[^'\"]+)",
+        r"location\.replace\(\s*['\"](https?://[^'\"]+)",
+    ):
+        for match in re.findall(pattern, text, flags=re.I):
+            if match not in found:
+                found.append(match)
+    return found
 
 
 def _remember_qr_confirm(session: dict, data: dict) -> None:
@@ -469,8 +500,10 @@ def _remember_qr_confirm(session: dict, data: dict) -> None:
         session["verification_pending"] = True
         if url:
             session["verification_url"] = url
+            _store_iv_callback(session, url)
     elif url and not is_risk_verify_url(url):
         session["landing_url"] = url
+        _store_iv_callback(session, url)
     session["confirm_data"] = {
         key: data.get(key)
         for key in (
@@ -533,12 +566,17 @@ def _pending_verify_payload(session_id: str, session: dict) -> dict:
     }
 
 
-async def _fetch_cookie_urls(urls: list[str]) -> None:
-    for url in urls:
-        text = str(url or "").strip()
-        if not text.startswith("http"):
+async def _fetch_cookie_urls(urls: list[str], session: Optional[dict] = None) -> None:
+    pending = list(urls)
+    seen: set[str] = set()
+    while pending:
+        text = str(pending.pop(0) or "").strip()
+        if not text.startswith("http") or text in seen:
             continue
+        seen.add(text)
         apply_cookies(cookies_from_query_url(text))
+        if session is not None:
+            _store_iv_callback(session, text)
         if is_risk_verify_url(text):
             continue
         try:
@@ -549,6 +587,15 @@ async def _fetch_cookie_urls(urls: list[str]) -> None:
             )
             _ingest_response_cookies(response)
             apply_cookies(cookies_from_query_url(str(response.url)))
+            if session is not None:
+                _store_iv_callback(session, str(response.url))
+            extras: list[str] = []
+            try:
+                ctype = (response.headers.get("content-type") or "").lower()
+                if "json" not in ctype:
+                    extras.extend(_js_redirect_urls(response.text))
+            except Exception:
+                extras = []
             try:
                 body = response.json()
             except Exception:
@@ -556,8 +603,10 @@ async def _fetch_cookie_urls(urls: list[str]) -> None:
             inner = ((body.get("content") or {}).get("data")) or body.get("data") or {}
             if isinstance(inner, dict):
                 _apply_payload_cookies(inner)
-                for extra in collect_async_urls(inner):
-                    apply_cookies(cookies_from_query_url(extra))
+                extras.extend(collect_async_urls(inner))
+            for extra in extras:
+                if extra.startswith("http") and extra not in seen:
+                    pending.append(extra)
         except Exception:
             continue
     _promote_cookies_to_goofish()
@@ -569,8 +618,10 @@ async def _absorb_passport_data(data: dict, session: Optional[dict] = None) -> N
     _apply_payload_cookies(data)
     urls = collect_async_urls(data)
     iframe = _iframe_url_from(data)
-    if iframe and not is_risk_verify_url(iframe):
+    if iframe and (not is_risk_verify_url(iframe) or is_iv_check_login_url(iframe)):
         urls.append(iframe)
+        if session is not None:
+            _store_iv_callback(session, iframe)
     for key in ("st", "redirectUrl", "returnUrl", "targetUrl"):
         val = data.get(key)
         if isinstance(val, str) and val.startswith("http"):
@@ -584,7 +635,10 @@ async def _absorb_passport_data(data: dict, session: Optional[dict] = None) -> N
         landing = session.get("landing_url")
         if landing and landing not in urls and not is_risk_verify_url(str(landing)):
             urls.append(str(landing))
-    await _fetch_cookie_urls(urls)
+        callback = session.get("callback_url")
+        if callback and callback not in urls:
+            urls.append(str(callback))
+    await _fetch_cookie_urls(urls, session)
 
 
 async def _exchange_login_token(session: dict, session_id: str = "") -> None:
@@ -674,8 +728,78 @@ async def _exchange_login_token(session: dict, session_id: str = "") -> None:
     _promote_cookies_to_goofish()
 
 
+async def _exchange_havana_iv(session: dict, session_id: str = "") -> None:
+    token = str(session.get("havana_iv_token") or "").strip()
+    if not token:
+        return
+    attempts = (
+        (
+            "/newlogin/login.do",
+            {
+                "havanaIvToken": token,
+                "appName": "xianyu",
+                "fromSite": "77",
+                "bizScene": "qrcode",
+            },
+        ),
+        (
+            "/newlogin/safe/ivCheckLogin.do",
+            {
+                "havana_iv_token": token,
+                "appName": "xianyu",
+                "fromSite": "77",
+                "scene": "qrcode",
+            },
+        ),
+    )
+    for path, params in attempts:
+        before = set(current_cookies())
+        try:
+            response = await client.post(
+                f"{PASSPORT_BASE}{path}",
+                params=params,
+                data={
+                    "deviceId": _cookie_value("cna"),
+                    "havana_iv_token": token,
+                    "havanaIvToken": token,
+                },
+                headers=_passport_headers(),
+                follow_redirects=True,
+            )
+            _ingest_response_cookies(response)
+            apply_cookies(cookies_from_query_url(str(response.url)))
+            try:
+                body = response.json()
+            except Exception:
+                body = {}
+            data = ((body.get("content") or {}).get("data")) or body.get("data") or {}
+            await _absorb_passport_data(data, session)
+            after = set(current_cookies())
+            append_event(
+                session_id or "-",
+                "havana_iv_exchange",
+                session,
+                path=path,
+                http_status=response.status_code,
+                new_cookies=sorted(after - before),
+                passport=summarize_passport(data),
+            )
+        except Exception as exc:
+            append_event(
+                session_id or "-",
+                "havana_iv_error",
+                session,
+                path=path,
+                error=str(exc)[:200],
+            )
+
+
 async def _complete_qr_login(session: dict, session_id: str) -> Optional[dict]:
     await _absorb_passport_data({}, session)
+    callback = str(session.get("callback_url") or "").strip()
+    if callback:
+        await _fetch_cookie_urls([callback], session)
+    await _exchange_havana_iv(session, session_id)
     await _exchange_login_token(session, session_id)
     try:
         await init_h5tk()
@@ -718,6 +842,40 @@ async def _complete_qr_login(session: dict, session_id: str) -> Optional[dict]:
             error=str(exc)[:200],
         )
         return None
+
+
+async def submit_qr_callback(session_id: str, callback_url: str) -> dict:
+    """浏览器跳到 ivCheckLogin.htm 白屏时，把地址栏 URL 交给服务端去换 Cookie。"""
+    from xianyu.login_trace import redact_url
+
+    session = _qr_sessions.get(session_id)
+    if not session:
+        raise KeyError("二维码会话不存在或已过期，请重新生成")
+    url = str(callback_url or "").strip()
+    if not url.startswith("http"):
+        raise ValueError("请粘贴浏览器地址栏的完整链接")
+    _store_iv_callback(session, url)
+    append_event(
+        session_id,
+        "iv_callback_submitted",
+        session,
+        callback=redact_url(url),
+    )
+    await _fetch_cookie_urls([url], session)
+    await _exchange_havana_iv(session, session_id)
+    completed = await _complete_qr_login(session, session_id)
+    if completed:
+        return completed
+    snapshot = login_snapshot()
+    return {
+        "session_id": session_id,
+        "logged_in": bool(snapshot.get("logged_in")),
+        "status": "verification_required" if not snapshot.get("logged_in") else "confirmed",
+        "hint": (
+            "已拉取 ivCheckLogin 回调，但仍未拿到登录 Cookie。可再贴一次地址栏 URL，或改用 POST /auth/cookie。"
+        ),
+        "debug": _login_debug(session),
+    }
 
 
 def _passport_headers() -> dict[str, str]:
@@ -923,8 +1081,8 @@ async def poll_qr_login(session_id: str) -> dict:
         pending["qr_status"] = status
         if pending.get("face_verify"):
             pending["hint"] = (
-                FACE_VERIFY_HINT
-                + f" 当前登录二维码状态是 {status}，不要重新生成登录二维码。"
+                "等待拍脸核身完成。登录码变为 expired 是正常的，不要重新生成。"
+                "若浏览器跳到 ivCheckLogin.htm 且白屏，把地址栏完整 URL 粘贴到终端回车。"
             )
         else:
             pending["hint"] = (

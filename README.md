@@ -113,9 +113,9 @@ curl 'http://localhost:8000/auth/qr/status?session_id=返回的session_id'
 
 1. 扫码后必须在闲鱼 App 点「确认登录」。接口里的 `SCANED` / `scanned` 只表示已扫码，还不是已登录。
 2. 请轮询 `GET /auth/qr/status?session_id=...` 直到 `logged_in: true`。只刷新 `GET /auth/status` 看不到扫码进度。
-3. 若返回 `verification_required` 且 `face_verify: true`：这是官方「拍摄脸部」核身页，**不要扫验证页链接生成的码**（手机会套娃）。`python spider.py login` 会打印链接并用系统默认浏览器打开；用闲鱼 App 扫浏览器里的码并拍脸，拍完不要关页面，终端会继续换登录态。不必用 Playwright。不要重新 `POST /auth/qr/start`。
-4. 默认浏览器跳转后仍未登录时，再把网页 Cookie 贴到 `POST /auth/cookie`。
-5. 排查换票：看终端里的 `追踪:` 行，或 `GET /auth/qr/trace?session_id=...`，完整日志在 `data/login_trace.jsonl`（不含 Cookie 明文）。`new_cookies=-` 表示这次换票没种上登录 Cookie。
+3. 若返回 `verification_required` 且 `face_verify: true`：用电脑浏览器打开 `verification_url`，用闲鱼扫页面里的码拍脸。登录码变成 `expired` 是正常的，不要重新 `python spider.py login`。
+4. 拍完若跳到 `ivCheckLogin.htm` 且白屏：把地址栏完整 URL 粘贴到终端回车，或 `POST /auth/qr/callback`。这是核身成功回调，服务端会去拉这个链接换 Cookie。
+5. 仍失败再把网页 Cookie 贴到 `POST /auth/cookie`。排查看终端 `追踪:` 或 `GET /auth/qr/trace?session_id=...`，日志在 `data/login_trace.jsonl`。
 
 ## 自动回复与通知
 

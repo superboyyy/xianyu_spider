@@ -163,3 +163,15 @@ def test_qr_trace_endpoint_returns_events():
         assert "debug" in body
     logout()
 
+
+def test_qr_callback_rejects_missing_session():
+    with _client() as client:
+        res = client.post(
+            "/auth/qr/callback",
+            json={
+                "session_id": "missing",
+                "url": "https://passport.goofish.com/newlogin/safe/ivCheckLogin.htm?havana_iv_token=x",
+            },
+        )
+        assert res.status_code == 404
+

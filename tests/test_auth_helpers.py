@@ -61,6 +61,19 @@ def test_cookies_from_query_url_and_risk_verify():
     assert is_identity_qr_page("https://passport.goofish.com/iv/verify.htm") is True
 
 
+def test_iv_check_login_url_is_callback_not_risk():
+    from xianyu.protocol import is_iv_check_login_url, is_login_success_url
+
+    url = (
+        "https://passport.goofish.com/newlogin/safe/ivCheckLogin.htm"
+        "?havana_iv_token=CN-SPLIT-xxx&appName=xianyu&ck=abc&sg=def"
+    )
+    assert is_iv_check_login_url(url) is True
+    assert is_risk_verify_url(url) is False
+    assert is_login_success_url(url) is True
+    assert is_identity_qr_page(url) is False
+
+
 def test_qr_png_base64_from_verify_url():
     raw = qr_png_base64("https://passport.goofish.com/iv/verify.htm")
     assert len(raw) > 100

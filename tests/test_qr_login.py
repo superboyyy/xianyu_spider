@@ -242,3 +242,36 @@ def test_poll_qr_does_not_fetch_verification_page():
     assert not result["verification_qr_ascii"]
     assert not any("verify.htm" in item for item in gets)
     mtop.logout()
+
+
+def test_submit_qr_callback_stores_havana_token():
+    mtop.logout()
+    mtop._qr_sessions["cb1"] = {
+        "t": "1",
+        "ck": "2",
+        "login_token": "tok",
+        "verification_pending": True,
+    }
+    url = (
+        "https://passport.goofish.com/newlogin/safe/ivCheckLogin.htm"
+        "?havana_iv_token=CN-SPLIT-abc&appName=xianyu"
+    )
+    empty = httpx.Response(
+        200,
+        json={},
+        request=httpx.Request("GET", url),
+    )
+
+    async def run():
+        with (
+            patch.object(mtop.client, "get", AsyncMock(return_value=empty)),
+            patch.object(mtop.client, "post", AsyncMock(return_value=empty)),
+            patch.object(mtop, "init_h5tk", AsyncMock()),
+            patch.object(mtop, "fetch_login_user", AsyncMock(side_effect=RuntimeError("mtop 未登录"))),
+        ):
+            return await mtop.submit_qr_callback("cb1", url)
+
+    result = asyncio.run(run())
+    assert mtop._qr_sessions["cb1"]["havana_iv_token"] == "CN-SPLIT-abc"
+    assert result["logged_in"] is False
+    mtop.logout()

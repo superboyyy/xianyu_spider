@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections.abc import Callable
 from typing import Any, Optional
 
@@ -28,6 +29,10 @@ def _open_default_browser(url: str) -> bool:
         return False
 
 
+async def _read_stdin_line() -> str:
+    return await asyncio.to_thread(sys.stdin.readline)
+
+
 async def run_qr_login(
     *,
     poll_interval: float = 2.0,
@@ -35,7 +40,7 @@ async def run_qr_login(
 ) -> int:
     """在终端画出登录/验证二维码，直到登录成功。返回进程退出码。"""
     print_fn: Printer = printer or print
-    from xianyu.mtop import init, login_snapshot, poll_qr_login, start_qr_login
+    from xianyu.mtop import init, login_snapshot, poll_qr_login, start_qr_login, submit_qr_callback
 
     await init()
     snapshot = login_snapshot()
@@ -51,6 +56,7 @@ async def run_qr_login(
     session_id = str(result.get("session_id") or "")
     printed_verify = ""
     printed_trace = ""
+    stdin_task: Optional[asyncio.Task] = None
     try:
         while True:
             status = await poll_qr_login(session_id)
@@ -74,22 +80,23 @@ async def run_qr_login(
                 if face_verify:
                     if verify_url != printed_verify:
                         _emit(print_fn, "")
-                        _emit(
-                            print_fn,
-                            "官方要「拍摄脸部」。不要扫下面这个链接生成的码，请直接在电脑打开它。",
-                        )
+                        _emit(print_fn, "官方要「拍摄脸部」。用电脑默认浏览器打开下面链接，扫页面里的码拍脸。")
                         if verify_url:
                             _emit(print_fn, verify_url)
                             opened = _open_default_browser(verify_url)
                             if opened:
-                                _emit(print_fn, "已用系统默认浏览器打开。用闲鱼 App 扫浏览器里的码并拍脸，拍完不要关页面，在此等待登录成功。")
-                            else:
-                                _emit(print_fn, "请 Ctrl+单击上面的链接，用默认浏览器打开后拍脸。")
+                                _emit(print_fn, "已打开默认浏览器。拍完不要关页面。")
+                        _emit(
+                            print_fn,
+                            "若跳到 ivCheckLogin.htm 且白屏：把地址栏完整 URL 粘贴到这里回车。登录码 expired 正常，不要重新 login。",
+                        )
                         printed_verify = verify_url or "face"
+                        if stdin_task is None:
+                            stdin_task = asyncio.create_task(_read_stdin_line())
                     else:
                         _emit(
                             print_fn,
-                            status.get("hint") or "等待拍脸验证...",
+                            "等待核身。白屏就把 ivCheckLogin 地址栏 URL 粘贴回车。",
                             end="\r",
                             flush=True,
                         )
@@ -121,7 +128,31 @@ async def run_qr_login(
                 return 1
             else:
                 _emit(print_fn, status.get("hint") or kind, end="\r", flush=True)
-            await asyncio.sleep(poll_interval)
+
+            if stdin_task is not None:
+                done, _ = await asyncio.wait({stdin_task}, timeout=poll_interval)
+                if stdin_task in done:
+                    pasted = (stdin_task.result() or "").strip()
+                    stdin_task = asyncio.create_task(_read_stdin_line())
+                    if pasted.startswith("http"):
+                        _emit(print_fn, "正在用回调 URL 换登录态...")
+                        try:
+                            callback = await submit_qr_callback(session_id, pasted)
+                        except Exception as exc:
+                            _emit(print_fn, f"提交回调失败: {exc}")
+                        else:
+                            if callback.get("logged_in"):
+                                user = callback.get("user") or login_snapshot()
+                                _emit(print_fn, f"登录成功 user_id={user.get('user_id') or '-'}")
+                                return 0
+                            _emit(print_fn, callback.get("hint") or "回调已提交，继续等待")
+                            if callback.get("debug", {}).get("last_trace_line"):
+                                _emit(print_fn, "追踪: " + callback["debug"]["last_trace_line"])
+            else:
+                await asyncio.sleep(poll_interval)
     except KeyboardInterrupt:
         _emit(print_fn, "\n已取消")
         return 130
+    finally:
+        if stdin_task is not None and not stdin_task.done():
+            stdin_task.cancel()

@@ -16,9 +16,10 @@ from xianyu.mtop import (
     qr_login_trace,
     qr_text_for_session,
     start_qr_login,
+    submit_qr_callback,
 )
 from xianyu.qr_browser import browser_job, start_browser_verify
-from xianyu.schemas import CookieLoginBody
+from xianyu.schemas import CookieLoginBody, QrCallbackBody
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -65,6 +66,18 @@ async def auth_qr_trace(session_id: str = Query(..., description="start 接口�
         return qr_login_trace(session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/qr/callback", summary="提交拍脸后的 ivCheckLogin 回调 URL")
+async def auth_qr_callback(body: QrCallbackBody):
+    try:
+        return await submit_qr_callback(body.session_id, body.url)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"处理核身回调失败: {exc}") from exc
 
 
 @router.get("/qr/continue", summary="扫码后手机验证说明页", response_class=HTMLResponse)
