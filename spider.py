@@ -1,16 +1,30 @@
 import asyncio
 import hashlib
+import json
 import os
 import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from tortoise import Model, fields
 from tortoise.contrib.fastapi import register_tortoise
 
-from api import init, search
+from api import (
+    fetch_login_user,
+    init,
+    login_snapshot,
+    login_with_cookie,
+    logout,
+    poll_qr_login,
+    search,
+    start_qr_login,
+)
+from im_service import im_service
 
 load_dotenv()
 
@@ -19,10 +33,15 @@ load_dotenv()
 async def lifespan(app: FastAPI):
     await init()
     yield
+    await im_service.stop()
 
 
 # 初始化FastAPI应用
-app = FastAPI(title="闲鱼商品搜索API", description="支持并发请求的闲鱼商品搜索接口", lifespan=lifespan)
+app = FastAPI(
+    title="闲鱼 HTTP 接口",
+    description="商品搜索 + Cookie/扫码登录 + 自动回复 + 消息通知（IM 使用官网同款 WebSocket）",
+    lifespan=lifespan,
+)
 
 
 def get_md5(text: str) -> str:
@@ -62,8 +81,52 @@ class XianyuProduct(Model):
         table = "xianyu_products"
 
 
+class ChatMessage(Model):
+    id = fields.IntField(pk=True)
+    conversation_id = fields.CharField(max_length=128, index=True, description="会话 ID")
+    sender_id = fields.CharField(max_length=64, default="", description="发送者 ID")
+    sender_name = fields.CharField(max_length=128, default="", description="发送者昵称")
+    content = fields.TextField(description="消息内容")
+    direction = fields.CharField(max_length=16, default="in", description="in/out")
+    replied = fields.BooleanField(default=False, description="是否已自动回复")
+    reply_text = fields.TextField(null=True, description="自动回复内容")
+    raw_json = fields.TextField(null=True, description="原始推送")
+    created_at = fields.DatetimeField(auto_now_add=True, description="入库时间")
+
+    class Meta:
+        table = "im_messages"
+
+
+class ReplySetting(Model):
+    id = fields.IntField(pk=True)
+    enabled = fields.BooleanField(default=False, description="是否开启自动回复")
+    default_reply = fields.TextField(default="您好，我看到消息后会尽快回复。")
+    keywords_json = fields.TextField(default="[]", description="关键词回复 JSON")
+    webhook_url = fields.CharField(max_length=500, default="", description="收到消息时回调的 URL")
+
+    class Meta:
+        table = "im_reply_settings"
+
+
+class CookieLoginBody(BaseModel):
+    cookie: str = Field(..., description="浏览器登录闲鱼后复制的完整 Cookie")
+
+
+class KeywordReply(BaseModel):
+    keyword: str
+    reply: str
+
+
+class AutoReplyBody(BaseModel):
+    enabled: Optional[bool] = None
+    default_reply: Optional[str] = None
+    keyword_replies: Optional[list[KeywordReply]] = None
+    webhook_url: Optional[str] = None
+
+
 # 配置数据库
-DATABASE_URL = os.environ.get("DATABASE_URL")
+os.makedirs("data", exist_ok=True)
+DATABASE_URL = os.environ.get("DATABASE_URL") or "sqlite://data/xianyu.sqlite3"
 DATABASE_CONFIG = {
     "connections": {
         "default": DATABASE_URL
@@ -210,6 +273,148 @@ async def search_items(keyword: str, max_pages: int = 1):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"爬取失败: {str(e)}")
+
+
+async def _reply_setting() -> ReplySetting:
+    setting = await ReplySetting.get_or_none(id=1)
+    if setting is None:
+        setting = await ReplySetting.create(id=1)
+    return setting
+
+
+def _setting_payload(setting: ReplySetting) -> dict:
+    try:
+        keywords = json.loads(setting.keywords_json or "[]")
+    except json.JSONDecodeError:
+        keywords = []
+    return {
+        "enabled": setting.enabled,
+        "default_reply": setting.default_reply,
+        "keyword_replies": keywords,
+        "webhook_url": setting.webhook_url,
+    }
+
+
+@app.post("/auth/cookie", summary="Cookie 登录")
+async def auth_cookie(body: CookieLoginBody):
+    try:
+        return await login_with_cookie(body.cookie)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail=f"登录失败: {exc}") from exc
+
+
+@app.post("/auth/qr/start", summary="生成闲鱼扫码登录二维码")
+async def auth_qr_start():
+    try:
+        return await start_qr_login()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"二维码生成失败: {exc}") from exc
+
+
+@app.get("/auth/qr/status", summary="查询扫码登录状态")
+async def auth_qr_status(session_id: str = Query(..., description="start 接口返回的 session_id")):
+    try:
+        return await poll_qr_login(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"查询扫码状态失败: {exc}") from exc
+
+
+@app.get("/auth/status", summary="当前登录态")
+async def auth_status():
+    snapshot = login_snapshot()
+    if snapshot.get("logged_in"):
+        try:
+            snapshot["user"] = await fetch_login_user()
+        except Exception as exc:
+            snapshot["warning"] = str(exc)
+    return snapshot
+
+
+@app.post("/auth/logout", summary="退出登录")
+async def auth_logout():
+    await im_service.stop()
+    logout()
+    return {"ok": True}
+
+
+@app.get("/im/config", summary="读取自动回复配置")
+async def get_im_config():
+    return _setting_payload(await _reply_setting())
+
+
+@app.put("/im/config", summary="更新自动回复与 Webhook 通知")
+async def put_im_config(body: AutoReplyBody):
+    setting = await _reply_setting()
+    if body.enabled is not None:
+        setting.enabled = body.enabled
+    if body.default_reply is not None:
+        setting.default_reply = body.default_reply
+    if body.keyword_replies is not None:
+        setting.keywords_json = json.dumps(
+            [item.model_dump() for item in body.keyword_replies],
+            ensure_ascii=False,
+        )
+    if body.webhook_url is not None:
+        setting.webhook_url = body.webhook_url
+    await setting.save()
+    return _setting_payload(setting)
+
+
+@app.post("/im/start", summary="开始监听消息并自动回复")
+async def im_start():
+    snapshot = login_snapshot()
+    if not snapshot.get("logged_in"):
+        raise HTTPException(status_code=401, detail="请先通过 /auth/cookie 或扫码登录")
+    return await im_service.start()
+
+
+@app.post("/im/stop", summary="停止监听")
+async def im_stop():
+    return await im_service.stop()
+
+
+@app.get("/im/status", summary="IM 监听状态")
+async def im_status():
+    return im_service.status() | {"login": login_snapshot()}
+
+
+@app.get("/im/messages", summary="最近收到的消息")
+async def im_messages(limit: int = Query(50, ge=1, le=200)):
+    rows = await ChatMessage.all().order_by("-id").limit(limit)
+    return [
+        {
+            "id": row.id,
+            "conversation_id": row.conversation_id,
+            "sender_id": row.sender_id,
+            "sender_name": row.sender_name,
+            "content": row.content,
+            "direction": row.direction,
+            "replied": row.replied,
+            "reply_text": row.reply_text,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+        for row in rows
+    ]
+
+
+@app.get("/im/events", summary="SSE 实时通知（收到消息/已回复）")
+async def im_events():
+    queue = im_service.subscribe()
+
+    async def generate():
+        try:
+            yield 'data: {"event":"connected"}\n\n'
+            while True:
+                item = await queue.get()
+                yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+        finally:
+            im_service.unsubscribe(queue)
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 if __name__ == "__main__":
