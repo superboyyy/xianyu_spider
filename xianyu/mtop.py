@@ -546,6 +546,7 @@ def _pending_verify_payload(session_id: str, session: dict) -> dict:
         "session_id": session_id,
         "status": "verification_required",
         "logged_in": False,
+        "verification_pending": True,
         "face_verify": face_verify,
         "verification_url": verify_url,
         "verification_qr_image_base64": "" if face_verify else _verification_qr(session),
@@ -577,7 +578,7 @@ async def _fetch_cookie_urls(urls: list[str], session: Optional[dict] = None) ->
         apply_cookies(cookies_from_query_url(text))
         if session is not None:
             _store_iv_callback(session, text)
-        if is_risk_verify_url(text):
+        if is_identity_qr_page(text) or is_risk_verify_url(text):
             continue
         try:
             response = await client.get(
@@ -797,7 +798,7 @@ async def _exchange_havana_iv(session: dict, session_id: str = "") -> None:
 async def _complete_qr_login(session: dict, session_id: str) -> Optional[dict]:
     await _absorb_passport_data({}, session)
     callback = str(session.get("callback_url") or "").strip()
-    if callback:
+    if callback and is_iv_check_login_url(callback) and not is_identity_qr_page(callback):
         await _fetch_cookie_urls([callback], session)
     await _exchange_havana_iv(session, session_id)
     await _exchange_login_token(session, session_id)

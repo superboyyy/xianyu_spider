@@ -74,6 +74,19 @@ def test_iv_check_login_url_is_callback_not_risk():
     assert is_identity_qr_page(url) is False
 
 
+def test_havana_verify_page_with_token_is_not_callback():
+    from xianyu.protocol import is_iv_check_login_url, is_login_success_url
+
+    verify = (
+        "https://passport.goofish.com/iv/verify.htm"
+        "?havana_iv_token=AAA&from=qr&appName=xianyu"
+    )
+    assert is_iv_check_login_url(verify) is False
+    assert is_risk_verify_url(verify) is True
+    assert is_identity_qr_page(verify) is True
+    assert is_login_success_url(verify) is False
+
+
 def test_qr_png_base64_from_verify_url():
     raw = qr_png_base64("https://passport.goofish.com/iv/verify.htm")
     assert len(raw) > 100

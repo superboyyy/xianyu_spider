@@ -244,6 +244,59 @@ def test_poll_qr_does_not_fetch_verification_page():
     mtop.logout()
 
 
+def test_poll_qr_does_not_fetch_havana_verify_page_with_token():
+    mtop.logout()
+    mtop._qr_sessions["s7"] = {"t": "1", "ck": "2", "csrf": "", "cookie2": ""}
+    verify_url = (
+        "https://passport.goofish.com/iv/verify.htm"
+        "?havana_iv_token=AAA&from=qr"
+    )
+    confirmed = _query_response(
+        "CONFIRMED",
+        extra={
+            "iframeRedirect": True,
+            "iframeRedirectUrl": verify_url,
+            "token": "login-token-3",
+        },
+    )
+    empty = httpx.Response(
+        200,
+        json={},
+        request=httpx.Request("POST", "https://passport.goofish.com/login_token/login.do"),
+    )
+    gets: list[str] = []
+
+    async def fake_post(url, **kwargs):
+        text = str(url)
+        if "query.do" in text:
+            return confirmed
+        return empty
+
+    async def fake_get(url, **kwargs):
+        gets.append(str(url))
+        return empty
+
+    async def run():
+        with (
+            patch.object(mtop.client, "post", side_effect=fake_post),
+            patch.object(mtop.client, "get", side_effect=fake_get),
+            patch.object(mtop, "init_h5tk", AsyncMock()),
+            patch.object(mtop, "fetch_login_user", AsyncMock(side_effect=RuntimeError("mtop 未登录"))),
+        ):
+            return await mtop.poll_qr_login("s7")
+
+    result = asyncio.run(run())
+    assert result["status"] == "verification_required"
+    assert result["face_verify"] is True
+    assert result["verification_pending"] is True
+    assert "havana_iv_token=AAA" in result["verification_url"]
+    assert not mtop._qr_sessions["s7"].get("callback_url")
+    assert not mtop._qr_sessions["s7"].get("havana_iv_token")
+    assert not any("verify.htm" in item for item in gets)
+    assert not any("havana_iv_token=AAA" in item for item in gets)
+    mtop.logout()
+
+
 def test_submit_qr_callback_stores_havana_token():
     mtop.logout()
     mtop._qr_sessions["cb1"] = {

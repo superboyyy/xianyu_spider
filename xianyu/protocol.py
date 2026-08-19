@@ -128,10 +128,10 @@ def cookies_from_query_url(url: str) -> dict[str, str]:
 
 
 def is_iv_check_login_url(url: str) -> bool:
-    """拍脸成功后的回调页 ivCheckLogin.htm，白屏也要由服务端去 GET 换 Cookie。"""
+    """拍脸成功后的回调页 ivCheckLogin.htm。核身页 verify.htm 即使带 havana_iv_token 也不是回调。"""
     text = (url or "").lower()
-    compact = text.replace("_", "")
-    return "ivchecklogin" in compact or "havana_iv_token=" in text or "havanaivtoken=" in compact
+    compact = text.replace("_", "").replace("-", "")
+    return "ivchecklogin" in compact
 
 
 def is_risk_verify_url(url: str) -> bool:
@@ -157,7 +157,11 @@ FACE_VERIFY_HINT = (
 
 def is_login_success_url(url: str) -> bool:
     text = (url or "").lower()
-    if not text or is_risk_verify_url(text):
+    if not text:
+        return False
+    if is_iv_check_login_url(text):
+        return True
+    if is_risk_verify_url(text):
         return False
     return any(host in text for host in ("goofish.com", "taobao.com", "tmall.com", "alipay.com"))
 
