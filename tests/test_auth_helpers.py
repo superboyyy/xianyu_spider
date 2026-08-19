@@ -3,6 +3,7 @@ from xianyu.protocol import (
     cookie_user_id,
     cookies_from_query_url,
     has_login_cookies,
+    has_official_session_cookies,
     is_qr_confirmed,
     is_identity_qr_page,
     is_risk_verify_url,
@@ -110,3 +111,10 @@ def test_import_playwright_cookies_sets_unb():
     import_playwright_cookies([{"name": "unb", "value": "42"}])
     assert login_snapshot()["user_id"] == "42"
     logout()
+
+
+def test_official_session_cookies_need_all_three():
+    assert has_official_session_cookies({}) is False
+    assert has_official_session_cookies({"unb": "1"}) is False
+    assert has_official_session_cookies({"unb": "1", "cookie2": "c"}) is False
+    assert has_official_session_cookies({"unb": "1", "cookie2": "c", "_m_h5_tk": "t"}) is True

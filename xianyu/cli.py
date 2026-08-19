@@ -49,12 +49,85 @@ def _still_verifying(status: dict[str, Any], kind: str) -> bool:
     )
 
 
+async def run_login(
+    *,
+    mode: str = "browser",
+    cookie: str = "",
+    poll_interval: float = 2.0,
+    timeout: int = 180,
+    printer: Optional[Printer] = None,
+) -> int:
+    """默认打开官方登录页扫码；也支持粘贴 Cookie 或纯 HTTP 画码。"""
+    print_fn: Printer = printer or print
+    from xianyu.mtop import init, login_snapshot
+
+    await init()
+    snapshot = login_snapshot()
+    if snapshot.get("logged_in"):
+        _emit(print_fn, f"已经登录，user_id={snapshot.get('user_id') or '-'}")
+        return 0
+
+    kind = (mode or "browser").strip().lower()
+    if kind == "cookie":
+        return await _run_cookie_login(cookie=cookie, printer=print_fn)
+    if kind == "http":
+        return await run_qr_login(poll_interval=poll_interval, printer=print_fn)
+    return await _run_browser_login(timeout=timeout, printer=print_fn)
+
+
+async def _run_browser_login(*, timeout: int, printer: Printer) -> int:
+    _emit(printer, "将打开闲鱼官方登录页。请用闲鱼 App 扫浏览器里的码，并在手机上确认。")
+    _emit(printer, "若弹出拍脸，在同一个浏览器窗口完成。不要去粘贴 ivCheckLogin 白屏链接。")
+    _emit(printer, "备选：python spider.py login --cookie")
+    from xianyu.qr_browser import login_via_official_page
+    from xianyu.mtop import login_snapshot
+
+    try:
+        result = await login_via_official_page(timeout=timeout)
+    except Exception as exc:
+        _emit(printer, f"浏览器扫码失败: {exc}")
+        _emit(printer, "改用 Cookie：浏览器登录 www.goofish.com 后，F12 复制 Cookie，再运行 python spider.py login --cookie")
+        return 1
+    if result.get("logged_in"):
+        user = result.get("user") or login_snapshot()
+        _emit(printer, f"登录成功 user_id={user.get('user_id') or result.get('user_id') or '-'}")
+        return 0
+    _emit(printer, result.get("hint") or "未登录")
+    return 1
+
+
+async def _run_cookie_login(*, cookie: str, printer: Printer) -> int:
+    from xianyu.mtop import login_snapshot, login_with_cookie
+
+    text = (cookie or "").strip()
+    if not text or text == "-":
+        if not _stdin_is_interactive():
+            _emit(printer, "请提供 Cookie：python spider.py login --cookie 'unb=...; cookie2=...; _m_h5_tk=...'")
+            return 1
+        _emit(printer, "请粘贴闲鱼网页 Cookie 后回车（需包含 unb，以及 cookie2 或 _m_h5_tk）：")
+        text = (await _read_stdin_line()).strip()
+    if text.startswith("http"):
+        _emit(printer, "这是网页链接，不是 Cookie。请从浏览器 F12 → Application/存储 → Cookie 复制，或改用默认的浏览器扫码登录。")
+        return 1
+    if "=" not in text:
+        _emit(printer, "Cookie 格式不对。")
+        return 1
+    try:
+        await login_with_cookie(text)
+    except Exception as exc:
+        _emit(printer, f"Cookie 登录失败: {exc}")
+        return 1
+    user = login_snapshot()
+    _emit(printer, f"登录成功 user_id={user.get('user_id') or '-'}")
+    return 0
+
+
 async def run_qr_login(
     *,
     poll_interval: float = 2.0,
     printer: Optional[Printer] = None,
 ) -> int:
-    """在终端画出登录/验证二维码，直到登录成功。返回进程退出码。"""
+    """纯 HTTP 终端画码（账号常被拍脸拦住，默认请用浏览器扫码）。"""
     print_fn: Printer = printer or print
     from xianyu.mtop import init, login_snapshot, poll_qr_login, start_qr_login, submit_qr_callback
 
@@ -66,6 +139,7 @@ async def run_qr_login(
 
     result = await start_qr_login()
     ascii_qr = str(result.get("qr_ascii") or "") or qr_ascii(str(result.get("qr_content") or ""))
+    _emit(print_fn, "注意：纯 HTTP 画码遇到拍脸经常登不上。推荐先 Ctrl+C，改跑 python spider.py login。")
     _emit(print_fn, "请用闲鱼 App 扫下面的登录二维码，并在手机上点「确认登录」。")
     _emit(print_fn, ascii_qr, end="" if ascii_qr.endswith("\n") else "\n")
     _emit(print_fn, f"session_id={result.get('session_id')}")
@@ -107,7 +181,11 @@ async def run_qr_login(
                                 _emit(print_fn, "已打开默认浏览器。拍完不要关页面。")
                         _emit(
                             print_fn,
-                            "若跳到 ivCheckLogin.htm 且白屏：把地址栏完整 URL 粘贴到这里回车。登录码 expired 正常，不要重新 login。",
+                            "纯 HTTP 换不了拍脸票。请 Ctrl+C，改跑 python spider.py login，在弹出的官方登录页里扫码并拍脸。",
+                        )
+                        _emit(
+                            print_fn,
+                            "或浏览器登录 www.goofish.com 后：python spider.py login --cookie。白屏链接通常换不了登录态。",
                         )
                         printed_verify = verify_url or "face"
                         if stdin_task is None and _stdin_is_interactive():
@@ -115,7 +193,7 @@ async def run_qr_login(
                     else:
                         _emit(
                             print_fn,
-                            "等待核身。白屏就把 ivCheckLogin 地址栏 URL 粘贴回车。",
+                            "仍在等待核身。白屏链接换不了票，请改用 python spider.py login。",
                             end="\r",
                             flush=True,
                         )

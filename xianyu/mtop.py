@@ -265,8 +265,8 @@ def login_snapshot() -> dict:
     }
     if not logged_in:
         snapshot["hint"] = (
-            "若刚扫码，请轮询 GET /auth/qr/status?session_id=... 直到 logged_in=true。"
-            "SCANED/scanned 只表示已扫码，必须在闲鱼 App 点确认。"
+            "未登录。本机有桌面时运行 python spider.py login，用闲鱼扫弹出窗口里的码（拍脸也在同一窗口）。"
+            "或先在浏览器登录 www.goofish.com，再 python spider.py login --cookie / POST /auth/cookie。"
         )
     return snapshot
 
@@ -465,9 +465,13 @@ def _store_iv_callback(session: dict, url: str) -> None:
         query = dict(parse_qsl(urlparse(text).query, keep_blank_values=True))
     except Exception:
         query = {}
+    session["callback_query"] = query
     token = str(query.get("havana_iv_token") or query.get("havanaIvToken") or "").strip()
     if token:
         session["havana_iv_token"] = token
+    ck = str(query.get("ck") or "").strip()
+    if ck and not session.get("ck"):
+        session["ck"] = ck
 
 
 def _js_redirect_urls(html: str) -> list[str]:
@@ -478,9 +482,44 @@ def _js_redirect_urls(html: str) -> list[str]:
         r"location\.replace\(\s*['\"](https?://[^'\"]+)",
     ):
         for match in re.findall(pattern, text, flags=re.I):
-            if match not in found:
+            if match not in found and not _is_waf_url(match):
                 found.append(match)
     return found
+
+
+def _is_waf_url(url: str) -> bool:
+    text = (url or "").lower()
+    return "_____tmd_____" in text or "/punish" in text or "x5secdata=" in text
+
+
+def _html_is_iv_error_page(html: str) -> bool:
+    text = html or ""
+    return "系统错误" in text or "请稍后重试" in text
+
+
+def _iv_exchange_form(session: dict) -> dict[str, str]:
+    query = session.get("callback_query") if isinstance(session.get("callback_query"), dict) else {}
+    token = str(session.get("havana_iv_token") or "").strip()
+    return {
+        "deviceId": _cookie_value("cna"),
+        "havana_iv_token": token,
+        "havanaIvToken": token,
+        "token": str(session.get("login_token") or ""),
+        "t": str(session.get("t") or ""),
+        "ck": str(query.get("ck") or session.get("ck") or ""),
+        "sg": str(query.get("sg") or ""),
+        "cdt": str(query.get("cdt") or ""),
+        "scene": str(query.get("scene") or "qrcode"),
+        "appName": str(query.get("appName") or "xianyu"),
+        "appEntrance": str(query.get("appEntrance") or "web"),
+        "fromSite": "77",
+        "bizScene": "qrcode",
+        "_csrf_token": str(session.get("csrf") or _cookie_value("XSRF-TOKEN") or ""),
+        "umidToken": "",
+        "hsiz": str(session.get("cookie2") or _cookie_value("cookie2") or ""),
+        "lang": str(query.get("lang") or "zh_CN"),
+        "rf": str(query.get("rf") or ""),
+    }
 
 
 def _remember_qr_confirm(session: dict, data: dict) -> None:
@@ -590,11 +629,25 @@ async def _fetch_cookie_urls(urls: list[str], session: Optional[dict] = None) ->
             apply_cookies(cookies_from_query_url(str(response.url)))
             if session is not None:
                 _store_iv_callback(session, str(response.url))
+            html = ""
+            try:
+                html = response.text or ""
+            except Exception:
+                html = ""
+            if is_iv_check_login_url(text) and _html_is_iv_error_page(html):
+                append_event(
+                    "-",
+                    "iv_page_system_error",
+                    session,
+                    http_status=response.status_code,
+                    hint="ivCheckLogin.htm 是拍脸回跳页，裸 GET 只会系统错误，不会种登录 Cookie。",
+                )
+                continue
             extras: list[str] = []
             try:
                 ctype = (response.headers.get("content-type") or "").lower()
                 if "json" not in ctype:
-                    extras.extend(_js_redirect_urls(response.text))
+                    extras.extend(_js_redirect_urls(html))
             except Exception:
                 extras = []
             try:
@@ -675,7 +728,7 @@ async def _exchange_login_token(session: dict, session_id: str = "") -> None:
             response = await client.post(
                 f"{PASSPORT_BASE}{path}",
                 params=params,
-                data={"deviceId": _cookie_value("cna")},
+                data=_iv_exchange_form(session) if session.get("havana_iv_token") else {"deviceId": _cookie_value("cna")},
                 headers=_passport_headers(),
                 follow_redirects=True,
             )
@@ -733,25 +786,36 @@ async def _exchange_havana_iv(session: dict, session_id: str = "") -> None:
     token = str(session.get("havana_iv_token") or "").strip()
     if not token:
         return
-    attempts = (
+    form = _iv_exchange_form(session)
+    query = session.get("callback_query") if isinstance(session.get("callback_query"), dict) else {}
+    attempts: list[tuple[str, dict[str, str]]] = []
+    login_token = str(session.get("login_token") or "").strip()
+    if login_token:
+        attempts.append(
+            (
+                "/login_token/login.do",
+                {
+                    "token": login_token,
+                    "subFlow": "DIALOG_CHECK_LOGIN_RPC",
+                    "nextCode": "0018",
+                    "bizScene": "qrcode",
+                    "confirm": "true",
+                    "havanaIvToken": token,
+                },
+            )
+        )
+    attempts.append(
         (
             "/newlogin/login.do",
             {
                 "havanaIvToken": token,
-                "appName": "xianyu",
+                "appName": str(query.get("appName") or "xianyu"),
                 "fromSite": "77",
+                "appEntrance": str(query.get("appEntrance") or "web"),
                 "bizScene": "qrcode",
+                "_bx-v": "2.5.31",
             },
-        ),
-        (
-            "/newlogin/safe/ivCheckLogin.do",
-            {
-                "havana_iv_token": token,
-                "appName": "xianyu",
-                "fromSite": "77",
-                "scene": "qrcode",
-            },
-        ),
+        )
     )
     for path, params in attempts:
         before = set(current_cookies())
@@ -759,16 +823,29 @@ async def _exchange_havana_iv(session: dict, session_id: str = "") -> None:
             response = await client.post(
                 f"{PASSPORT_BASE}{path}",
                 params=params,
-                data={
-                    "deviceId": _cookie_value("cna"),
-                    "havana_iv_token": token,
-                    "havanaIvToken": token,
-                },
-                headers=_passport_headers(),
+                data=form,
+                headers={**_passport_headers(), "Content-Type": "application/x-www-form-urlencoded"},
                 follow_redirects=True,
             )
             _ingest_response_cookies(response)
             apply_cookies(cookies_from_query_url(str(response.url)))
+            html = ""
+            try:
+                html = response.text or ""
+            except Exception:
+                html = ""
+            if _html_is_iv_error_page(html) or _is_waf_url(str(response.url)):
+                append_event(
+                    session_id or "-",
+                    "havana_iv_blocked",
+                    session,
+                    path=path,
+                    http_status=response.status_code,
+                    waf=_is_waf_url(str(response.url)),
+                    page_error=_html_is_iv_error_page(html),
+                    has_ck=bool(form.get("ck")),
+                    has_sg=bool(form.get("sg")),
+                )
             try:
                 body = response.json()
             except Exception:
@@ -784,6 +861,8 @@ async def _exchange_havana_iv(session: dict, session_id: str = "") -> None:
                 http_status=response.status_code,
                 new_cookies=sorted(after - before),
                 passport=summarize_passport(data),
+                has_ck=bool(form.get("ck")),
+                has_sg=bool(form.get("sg")),
             )
         except Exception as exc:
             append_event(

@@ -190,3 +190,71 @@ def test_cli_ignores_expired_while_face_verify_pending():
     blob = "\n".join(printed.chunks)
     assert "8" in blob
     assert "请重新运行" not in blob
+
+
+def test_cli_browser_login_imports_official_page_cookies():
+    printed = _Capture()
+
+    async def fake_browser(**kwargs):
+        return {"ok": True, "logged_in": True, "user_id": "2048", "user": {"user_id": "2048"}}
+
+    async def run():
+        with (
+            patch("xianyu.mtop.init", AsyncMock()),
+            patch("xianyu.mtop.login_snapshot", return_value={"logged_in": False}),
+            patch("xianyu.qr_browser.login_via_official_page", side_effect=fake_browser),
+        ):
+            from xianyu.cli import run_login
+
+            return await run_login(mode="browser", printer=printed)
+
+    code = asyncio.run(run())
+    assert code == 0
+    blob = "\n".join(printed.chunks)
+    assert "官方登录页" in blob
+    assert "2048" in blob
+
+
+def test_cli_cookie_login_rejects_ivcheck_url():
+    printed = _Capture()
+
+    async def run():
+        with (
+            patch("xianyu.mtop.init", AsyncMock()),
+            patch("xianyu.mtop.login_snapshot", return_value={"logged_in": False}),
+        ):
+            from xianyu.cli import run_login
+
+            return await run_login(
+                mode="cookie",
+                cookie="https://passport.goofish.com/newlogin/safe/ivCheckLogin.htm?havana_iv_token=x",
+                printer=printed,
+            )
+
+    code = asyncio.run(run())
+    assert code == 1
+    blob = "\n".join(printed.chunks)
+    assert "不是 Cookie" in blob
+
+
+def test_cli_cookie_login_success():
+    printed = _Capture()
+
+    async def fake_cookie(text):
+        assert "unb=9" in text
+        return {"logged_in": True, "user_id": "9"}
+
+    async def run():
+        with (
+            patch("xianyu.mtop.init", AsyncMock()),
+            patch("xianyu.mtop.login_snapshot", side_effect=[{"logged_in": False}, {"logged_in": True, "user_id": "9"}]),
+            patch("xianyu.mtop.login_with_cookie", side_effect=fake_cookie),
+        ):
+            from xianyu.cli import run_login
+
+            return await run_login(mode="cookie", cookie="unb=9; cookie2=abc; _m_h5_tk=tok", printer=printed)
+
+    code = asyncio.run(run())
+    assert code == 0
+    blob = "\n".join(printed.chunks)
+    assert "9" in blob

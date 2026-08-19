@@ -45,6 +45,9 @@ LOGIN_COOKIE_NAMES = (
     "havana-lgc1",
 )
 
+# fancyboi999/goofish-cli 同款：这三个齐了才算网页扫码登录完成。
+OFFICIAL_SESSION_COOKIE_NAMES = ("_m_h5_tk", "unb", "cookie2")
+
 COOKIE_QUERY_ALIAS = {
     "unb": "unb",
     "unb": "unb",
@@ -103,6 +106,11 @@ def has_login_cookies(cookies: dict[str, str]) -> bool:
     if cookie_user_id(cookies):
         return True
     return any(str(cookies.get(name) or "").strip() for name in LOGIN_COOKIE_NAMES)
+
+
+def has_official_session_cookies(cookies: dict[str, str]) -> bool:
+    """官方登录页扫码成功：`_m_h5_tk` + `unb` + `cookie2` 必须齐全。"""
+    return all(str((cookies or {}).get(name) or "").strip() for name in OFFICIAL_SESSION_COOKIE_NAMES)
 
 
 def cookies_from_query_url(url: str) -> dict[str, str]:

@@ -9,11 +9,11 @@
 
 | 能力 | 对本服务 | 对闲鱼侧 |
 |------|----------|----------|
-| 登录 | `POST /auth/cookie` 或扫码 HTTP 接口 | Passport / mtop HTTP。账号密码基本不可用（滑块风控），请用 Cookie 或 App 扫码 |
+| 登录 | `POST /auth/cookie` 导入网页 Cookie；本机桌面也可用 `python spider.py login` | 账号密码基本不可用（滑块）。纯 HTTP 扫码常被拍脸拦住；能跑通的是官方登录页扫码或 Cookie 导入 |
 | 自动回复 | `PUT /im/config` + `POST /im/start` | 取 Token 是 HTTP，真正收发消息必须维持 `wss://wss-goofish.dingtalk.com/` 长连接 |
 | 收到消息通知 | `GET /im/events`（SSE）或配置 `webhook_url` | 同上，闲鱼不会用普通 REST 推私信 |
 
-结论：**可以全部用本仓库的 HTTP API 来驱动**，不需要 Playwright。底层私信通道和网页版一样是 WebSocket，不能改成一次性 REST 轮询。
+结论：**业务接口可以全部用本仓库的 HTTP API 来驱动**。登录请用 Cookie 导入，或本机有桌面时用 Playwright 打开官方登录页扫码。底层私信通道和网页版一样是 WebSocket，不能改成一次性 REST 轮询。
 
 ## 功能特性
 
@@ -41,13 +41,16 @@ python spider.py
 
 打开 `http://localhost:8000/docs`。
 
-终端扫码登录（直接在命令行画出二维码）：
+登录（社区能跑通的两条路）：
 
 ```bash
+# 1) 推荐：打开闲鱼官方登录页，用 App 扫弹出窗口里的码；拍脸也在同一窗口完成
+pip install playwright && playwright install chromium
 python spider.py login
-```
 
-用闲鱼 App 扫终端里的码并点确认。若还要二次验证，终端会再画出验证二维码，请用 App 内「扫一扫」。
+# 2) 最稳：先在系统浏览器登录 https://www.goofish.com ，F12 复制 Cookie
+python spider.py login --cookie
+```
 
 ## 测试
 
@@ -72,7 +75,7 @@ RUN_LIVE=1 pytest tests/test_live_search.py
 spider.py                 # 启动入口：python spider.py / python spider.py login
 xianyu/
   app.py                  # FastAPI 组装
-  cli.py                  # 终端扫码登录（ASCII 二维码）
+  cli.py                  # 登录：默认官方登录页扫码 / --cookie / --http 画码
   mtop.py                 # 闲鱼 mtop HTTP（搜索/登录/IM Token）
   protocol.py             # Cookie 与 IM 推送解析、自动回复匹配
   im_client.py            # IM WebSocket
@@ -85,37 +88,38 @@ test.py                   # 旧的 Playwright 手工脚本，搜索主路径已�
 
 ## 登录
 
-浏览器登录 [闲鱼网页版](https://www.goofish.com) 后，从开发者工具复制 Cookie：
+闲鱼账号密码基本打不开（滑块）。GitHub 上能跑通的项目（[goofish-cli](https://github.com/fancyboi999/goofish-cli)、[XianyuAutoAgent](https://github.com/shaxiu/XianyuAutoAgent)）都是下面两条路，本仓库已经对齐：
+
+### 1. 官方登录页扫码（默认）
+
+本机要有桌面。会弹出真实浏览器，打开 `https://www.goofish.com/login`，用闲鱼 App 扫**窗口里**的码；若要拍脸，也在这个窗口完成。程序轮询 Cookie，直到 `_m_h5_tk`、`unb`、`cookie2` 齐全再写入 `data/session.json`。
 
 ```bash
+pip install playwright && playwright install chromium
+python spider.py login
+```
+
+不要去粘贴拍脸后的 `ivCheckLogin.htm` 白屏链接，那个页面本身不会种登录 Cookie。
+
+### 2. 粘贴网页 Cookie（最稳，无桌面也能用）
+
+1. 用系统 Chrome / Edge 打开 https://www.goofish.com 并登录（含拍脸）。
+2. F12 → Application/存储 → Cookies → 复制 `www.goofish.com` 的 Cookie（至少要有 `unb`，以及 `cookie2` 或 `_m_h5_tk`）。
+
+```bash
+python spider.py login --cookie
+# 或
 curl -X POST http://localhost:8000/auth/cookie \
   -H 'Content-Type: application/json' \
   -d '{"cookie":"unb=xxxx; cookie2=xxxx; _m_h5_tk=xxxx; ..."}'
 ```
 
-或在终端扫码（推荐）：
+`GET /auth/status` 可检查是否仍登录。
 
-```bash
-python spider.py login
-```
+### 不要用
 
-也可以自己调接口。`POST /auth/qr/start` 会返回 `qr_ascii`，可直接在终端打印：
-
-```bash
-curl -s -X POST http://localhost:8000/auth/qr/start | python -c 'import sys,json; print(json.load(sys.stdin)["qr_ascii"])'
-curl 'http://localhost:8000/auth/qr/status?session_id=返回的session_id'
-# 或：curl 'http://localhost:8000/auth/qr/text?session_id=返回的session_id'
-```
-
-`GET /auth/status` 可检查是否仍登录。登录态会写入 `data/session.json`。
-
-### 扫码后仍显示未登录？
-
-1. 扫码后必须在闲鱼 App 点「确认登录」。接口里的 `SCANED` / `scanned` 只表示已扫码，还不是已登录。
-2. 请轮询 `GET /auth/qr/status?session_id=...` 直到 `logged_in: true`。只刷新 `GET /auth/status` 看不到扫码进度。
-3. 若返回 `verification_required` 且 `face_verify: true`：用电脑浏览器打开 `verification_url`，用闲鱼扫页面里的码拍脸。登录码变成 `expired` 是正常的，不要重新 `python spider.py login`。
-4. 拍完若跳到 `ivCheckLogin.htm` 且白屏：把地址栏完整 URL 粘贴到终端回车，或 `POST /auth/qr/callback`。这是核身成功回调，服务端会去拉这个链接换 Cookie。
-5. 仍失败再把网页 Cookie 贴到 `POST /auth/cookie`。排查看终端 `追踪:` 或 `GET /auth/qr/trace?session_id=...`，日志在 `data/login_trace.jsonl`。
+- `python spider.py login --http`：终端画码纯 HTTP，确认登录后一旦要拍脸就换不了票。
+- 把 `ivCheckLogin.htm?havana_iv_token=...` 白屏 URL 交给服务端 GET / POST，换不来登录态。
 
 ## 自动回复与通知
 
