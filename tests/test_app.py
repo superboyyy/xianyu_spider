@@ -91,11 +91,10 @@ def test_qr_continue_page_renders_form():
         assert res.status_code == 200
         assert "text/html" in res.headers.get("content-type", "")
         assert "粘贴" in res.text
-        assert "打开本机浏览器" in res.text
         assert "verify.htm" in res.text
         assert "拍摄脸部" in res.text
         assert "套娃" in res.text or "不要扫" in res.text
-        assert "打开官方验证页" in res.text or "打开本机浏览器" in res.text
+        assert "默认浏览器" in res.text
     logout()
 
 

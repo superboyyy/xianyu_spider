@@ -115,14 +115,12 @@ def _continue_page_html(ctx: dict) -> str:
   <h1>这是「拍摄脸部」核身，不要扫链接码</h1>
   <p class="left">你扫出来的页面里已经有官方二维码。再用闲鱼去扫「验证页链接」会套娃，手机上还是同一页。</p>
   <ol class="left">
-    <li>点下面按钮，在<strong>电脑浏览器</strong>打开官方验证页。</li>
-    <li>用闲鱼 App 扫<strong>电脑窗口里</strong>「拍摄脸部」那个码（不要用系统相机）。</li>
-    <li>按提示拍脸。拍完不要关电脑窗口，等它自动跳转。</li>
+    <li>点下面链接，用<strong>系统默认浏览器</strong>打开官方验证页（不必用 Playwright）。</li>
+    <li>用闲鱼 App 扫<strong>浏览器里</strong>「拍摄脸部」那个码（不要用系统相机）。</li>
+    <li>按提示拍脸。拍完不要关页面，等它自动跳转；本服务会继续换登录态。</li>
   </ol>
   <p>
-    <a href="{verification_url or '#'}" target="_blank" rel="noopener">打开官方验证页</a>
-    &nbsp;
-    <button id="open-browser" type="button">打开本机浏览器完成验证</button>
+    <a href="{verification_url or '#'}" target="_blank" rel="noopener">用默认浏览器打开官方验证页</a>
   </p>
 """
     elif qr_b64:

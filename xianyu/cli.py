@@ -15,6 +15,19 @@ def _emit(printer: Printer, *args: Any, **kwargs: Any) -> None:
     printer(*args, **kwargs)
 
 
+def _open_default_browser(url: str) -> bool:
+    """用系统默认浏览器打开验证页，不依赖 Playwright。"""
+    text = (url or "").strip()
+    if not text:
+        return False
+    try:
+        import webbrowser
+
+        return bool(webbrowser.open(text, new=2))
+    except Exception:
+        return False
+
+
 async def run_qr_login(
     *,
     poll_interval: float = 2.0,
@@ -58,22 +71,15 @@ async def run_qr_login(
                         _emit(print_fn, "")
                         _emit(
                             print_fn,
-                            "官方要「拍摄脸部」。不要扫验证页链接生成的码，那会在手机上套娃。",
+                            "官方要「拍摄脸部」。不要扫下面这个链接生成的码，请直接在电脑打开它。",
                         )
-                        _emit(print_fn, "请用闲鱼 App 扫【电脑浏览器窗口里】的二维码，按提示拍脸，拍完不要关窗口。")
                         if verify_url:
                             _emit(print_fn, verify_url)
-                        try:
-                            from xianyu.qr_browser import start_browser_verify
-
-                            opened = await start_browser_verify(session_id)
-                            _emit(print_fn, opened.get("hint") or "已尝试打开本机浏览器。")
-                        except Exception as exc:
-                            continue_url = status.get("continue_url") or ""
-                            _emit(
-                                print_fn,
-                                f"无法自动打开浏览器：{exc}。请在电脑打开 {continue_url or 'continue_url'} 后点「打开本机浏览器」。",
-                            )
+                            opened = _open_default_browser(verify_url)
+                            if opened:
+                                _emit(print_fn, "已用系统默认浏览器打开。用闲鱼 App 扫浏览器里的码并拍脸，拍完不要关页面，在此等待登录成功。")
+                            else:
+                                _emit(print_fn, "请 Ctrl+单击上面的链接，用默认浏览器打开后拍脸。")
                         printed_verify = verify_url or "face"
                     else:
                         _emit(

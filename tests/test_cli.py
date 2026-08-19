@@ -97,22 +97,22 @@ def test_cli_face_verify_does_not_print_link_qr():
     async def fake_poll(session_id):
         return next(polls)
 
-    async def fake_browser(session_id):
-        return {"hint": "已打开浏览器"}
-
     async def run():
         with (
             patch("xianyu.mtop.init", AsyncMock()),
             patch("xianyu.mtop.login_snapshot", return_value={"logged_in": False}),
             patch("xianyu.mtop.start_qr_login", side_effect=fake_start),
             patch("xianyu.mtop.poll_qr_login", side_effect=fake_poll),
-            patch("xianyu.qr_browser.start_browser_verify", side_effect=fake_browser),
+            patch("xianyu.cli._open_default_browser", return_value=True) as open_browser,
         ):
-            return await run_qr_login(poll_interval=0, printer=printed)
+            code = await run_qr_login(poll_interval=0, printer=printed)
+            open_browser.assert_called_with("https://passport.goofish.com/iv/verify.htm")
+            return code
 
     code = asyncio.run(run())
     assert code == 0
     blob = "\n".join(printed.chunks)
     assert "QRLOGIN" in blob
     assert "拍摄脸部" in blob or "拍脸" in blob
-    assert "已打开浏览器" in blob
+    assert "https://passport.goofish.com/iv/verify.htm" in blob
+    assert "默认浏览器" in blob

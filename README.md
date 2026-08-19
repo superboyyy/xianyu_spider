@@ -113,8 +113,8 @@ curl 'http://localhost:8000/auth/qr/status?session_id=返回的session_id'
 
 1. 扫码后必须在闲鱼 App 点「确认登录」。接口里的 `SCANED` / `scanned` 只表示已扫码，还不是已登录。
 2. 请轮询 `GET /auth/qr/status?session_id=...` 直到 `logged_in: true`。只刷新 `GET /auth/status` 看不到扫码进度。
-3. 若返回 `verification_required` 且 `face_verify: true`：这是官方「拍摄脸部」核身页，**不要扫验证页链接生成的码**（手机会套娃，还是同一页）。在电脑打开 `continue_url` 或让 `python spider.py login` 弹出浏览器，用闲鱼 App 扫**电脑窗口里**的码并拍脸，拍完不要关窗口。不要重新 `POST /auth/qr/start`。
-4. 扫不了验证码时，再在 continue 页用本机浏览器完成，或把网页 Cookie 贴到 `POST /auth/cookie`。
+3. 若返回 `verification_required` 且 `face_verify: true`：这是官方「拍摄脸部」核身页，**不要扫验证页链接生成的码**（手机会套娃）。`python spider.py login` 会打印链接并用系统默认浏览器打开；用闲鱼 App 扫浏览器里的码并拍脸，拍完不要关页面，终端会继续换登录态。不必用 Playwright。不要重新 `POST /auth/qr/start`。
+4. 默认浏览器跳转后仍未登录时，再把网页 Cookie 贴到 `POST /auth/cookie`，或用 continue 页的 Playwright 后备导入。
 
 ## 自动回复与通知
 

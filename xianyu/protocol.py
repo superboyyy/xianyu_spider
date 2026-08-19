@@ -140,8 +140,8 @@ def is_identity_qr_page(url: str) -> bool:
 FACE_VERIFY_HINT = (
     "官方是「拍摄脸部」核身，验证页自己带二维码。"
     "不要扫验证页链接生成的码（手机会再打开同一页，变成套娃）。"
-    "请在电脑打开验证页或本机浏览器，用闲鱼 App 扫窗口里的码并拍脸；"
-    "拍完不要关电脑窗口，继续轮询同一个 session_id。"
+    "请在电脑用系统默认浏览器打开 verification_url，用闲鱼 App 扫页面里的码并拍脸；"
+    "拍完不要关浏览器，继续轮询同一个 session_id。不必使用 Playwright。"
 )
 
 
