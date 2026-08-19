@@ -17,6 +17,7 @@ from xianyu.protocol import (
     parse_cookie_header,
     qr_status_hint,
 )
+from xianyu.config import QR_SESSIONS_PATH
 from xianyu.session import load_session, save_session, clear_session
 
 BASE_URL = "https://h5api.m.goofish.com/h5/{}/1.0/"
@@ -122,6 +123,7 @@ async def init():
         _device_id = saved.get("device_id") or _device_id
         _user_info = saved.get("user") or {}
         await init_h5tk()
+    _load_qr_sessions()
 
 
 async def init_h5tk():
@@ -356,6 +358,197 @@ def logout() -> None:
     _user_info = {}
     clear_session()
     _qr_sessions.clear()
+    _save_qr_sessions()
+
+
+def _load_qr_sessions() -> None:
+    global _qr_sessions
+    if not QR_SESSIONS_PATH.exists():
+        return
+    try:
+        payload = json.loads(QR_SESSIONS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if isinstance(payload, dict):
+        _qr_sessions.update(payload)
+
+
+def _save_qr_sessions() -> None:
+    QR_SESSIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    serializable = {
+        session_id: {
+            key: value
+            for key, value in session.items()
+            if key != "code_content" and not str(key).startswith("_")
+        }
+        for session_id, session in _qr_sessions.items()
+    }
+    QR_SESSIONS_PATH.write_text(
+        json.dumps(serializable, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _login_token_from(data: dict) -> str:
+    if not isinstance(data, dict):
+        return ""
+    return str(
+        data.get("token")
+        or data.get("lgToken")
+        or data.get("loginToken")
+        or data.get("st")
+        or ""
+    )
+
+
+def _verification_url_from(data: dict) -> str:
+    if not isinstance(data, dict):
+        return ""
+    return str(
+        data.get("iframeRedirectUrl")
+        or data.get("iframeRedirectUrl")
+        or data.get("redirectUrl")
+        or data.get("url")
+        or ""
+    )
+
+
+def _needs_phone_verify(data: dict) -> bool:
+    if not isinstance(data, dict):
+        return False
+    return bool(
+        data.get("iframeRedirect")
+        or data.get("iframeRedirect")
+        or data.get("iframeRedirectUrl")
+        or data.get("iframeRedirectUrl")
+    )
+
+
+def _remember_qr_confirm(session: dict, data: dict) -> None:
+    token = _login_token_from(data)
+    if token:
+        session["login_token"] = token
+    url = _verification_url_from(data)
+    if url:
+        session["verification_url"] = url
+    if _needs_phone_verify(data):
+        session["verification_pending"] = True
+    session["confirm_data"] = {
+        key: data.get(key)
+        for key in ("token", "lgToken", "loginToken", "st", "iframeRedirectUrl", "iframeRedirectUrl")
+        if data.get(key)
+    }
+    _save_qr_sessions()
+
+
+def _pending_verify_payload(session_id: str, session: dict) -> dict:
+    return {
+        "session_id": session_id,
+        "status": "verification_required",
+        "logged_in": False,
+        "verification_url": session.get("verification_url") or "",
+        "hint": (
+            "账号需要手机验证。打开 verification_url 完成验证后，"
+            "继续轮询同一个 session_id 的 GET /auth/qr/status，不要重新生成二维码。"
+            "验证完成后二维码会显示过期，服务会用已保存的 token 换登录态。"
+        ),
+    }
+
+
+async def _exchange_login_token(session: dict) -> None:
+    token = session.get("login_token")
+    if not token:
+        return
+    attempts = (
+        (
+            "/login_token/login.do",
+            {
+                "token": token,
+                "subFlow": "DIALOG_CHECK_LOGIN_RPC",
+                "nextCode": "0018",
+                "bizScene": "qrcode",
+                "confirm": "true",
+            },
+        ),
+        (
+            "/newlogin/login.do",
+            {
+                "token": token,
+                "appName": "xianyu",
+                "fromSite": "77",
+                "bizScene": "qrcode",
+            },
+        ),
+    )
+    for path, params in attempts:
+        try:
+            response = await client.post(
+                f"{PASSPORT_BASE}{path}",
+                params=params,
+                data={"deviceId": _cookie_value("cna")},
+                headers=_passport_headers(),
+                follow_redirects=True,
+            )
+            _ingest_response_cookies(response)
+            try:
+                body = response.json()
+            except Exception:
+                body = {}
+            data = ((body.get("content") or {}).get("data")) or body.get("data") or {}
+            _apply_payload_cookies(data)
+        except Exception:
+            continue
+    try:
+        has_login = await client.post(
+            f"{PASSPORT_BASE}/newlogin/hasLogin.do",
+            params={"appName": "xianyu", "fromSite": "77"},
+            data={"appName": "xianyu", "fromSite": "77"},
+            headers=_passport_headers(),
+            follow_redirects=True,
+        )
+        _ingest_response_cookies(has_login)
+    except Exception:
+        pass
+    _promote_cookies_to_goofish()
+
+
+async def _complete_qr_login(session: dict, session_id: str) -> Optional[dict]:
+    await _exchange_login_token(session)
+    try:
+        await init_h5tk()
+    except Exception:
+        pass
+    try:
+        user = await fetch_login_user()
+        persist_login(user)
+        result = {
+            "session_id": session_id,
+            "status": "confirmed",
+            "logged_in": True,
+            "user": user,
+            "hint": "登录成功，可用 GET /auth/status 查看。",
+        }
+        session["login_result"] = result
+        session["verification_pending"] = False
+        _save_qr_sessions()
+        return result
+    except Exception as exc:
+        persist_login()
+        snapshot = login_snapshot()
+        if snapshot.get("logged_in"):
+            result = {
+                "session_id": session_id,
+                "status": "confirmed",
+                "logged_in": True,
+                "user": snapshot,
+                "warning": str(exc),
+                "hint": "登录成功，可用 GET /auth/status 查看。",
+            }
+            session["login_result"] = result
+            session["verification_pending"] = False
+            _save_qr_sessions()
+            return result
+        return None
 
 
 def _passport_headers() -> dict[str, str]:
@@ -431,6 +624,7 @@ async def start_qr_login() -> dict:
         "status": "NEW",
         "code_content": code_content,
     }
+    _save_qr_sessions()
     qr_image = ""
     try:
         import io
@@ -466,7 +660,7 @@ async def poll_qr_login(session_id: str) -> dict:
     if cached and cached.get("logged_in"):
         return cached
     snapshot = login_snapshot()
-    if session.get("status") == "confirmed" and snapshot.get("logged_in"):
+    if snapshot.get("logged_in"):
         result = {
             "session_id": session_id,
             "status": "confirmed",
@@ -475,7 +669,24 @@ async def poll_qr_login(session_id: str) -> dict:
             "hint": "登录成功，可用 GET /auth/status 查看。",
         }
         session["login_result"] = result
+        _save_qr_sessions()
         return result
+
+    if session.get("login_token") or session.get("verification_pending"):
+        if session.get("verification_url"):
+            try:
+                verify_resp = await client.get(
+                    session["verification_url"],
+                    headers=_passport_headers(),
+                    follow_redirects=True,
+                )
+                _ingest_response_cookies(verify_resp)
+            except Exception:
+                pass
+        completed = await _complete_qr_login(session, session_id)
+        if completed:
+            return completed
+
     form = {
         "t": str(session.get("t") or ""),
         "ck": session.get("ck") or "",
@@ -518,62 +729,50 @@ async def poll_qr_login(session_id: str) -> dict:
     )
     status = normalize_qr_status(str(raw_status))
     session["status"] = status
-    result = {
+    if is_qr_confirmed(raw_status):
+        _remember_qr_confirm(session, data)
+        completed = await _complete_qr_login(session, session_id)
+        if completed:
+            return completed
+        if session.get("verification_pending") or _needs_phone_verify(data):
+            return _pending_verify_payload(session_id, session)
+        persist_login()
+        snapshot = login_snapshot()
+        result = {
+            "session_id": session_id,
+            "status": status,
+            "raw_status": raw_status,
+            "logged_in": bool(snapshot.get("logged_in")),
+            "user": snapshot,
+            "hint": (
+                "登录成功，可用 GET /auth/status 查看。"
+                if snapshot.get("logged_in")
+                else "已确认，但还没拿到登录 Cookie。请再轮询一次；仍失败请改用 Cookie 登录。"
+            ),
+        }
+        if result["logged_in"]:
+            session["login_result"] = result
+            _save_qr_sessions()
+        return result
+
+    if session.get("verification_pending") or session.get("login_token"):
+        pending = _pending_verify_payload(session_id, session)
+        pending["raw_status"] = raw_status
+        pending["qr_status"] = status
+        pending["hint"] = (
+            "手机验证完成后请继续轮询本接口，不要重新生成二维码。"
+            "当前二维码状态是 "
+            f"{status}，服务会用确认时保存的 token 换登录态。"
+        )
+        return pending
+
+    return {
         "session_id": session_id,
         "status": status,
         "raw_status": raw_status,
         "logged_in": False,
         "hint": qr_status_hint(raw_status),
     }
-    if not is_qr_confirmed(raw_status):
-        return result
-    if data.get("iframeRedirect") or data.get("iframeRedirect"):
-        result["status"] = "verification_required"
-        result["verification_url"] = (
-            data.get("iframeRedirectUrl") or data.get("iframeRedirectUrl") or ""
-        )
-        result["hint"] = "账号需要手机验证，打开 verification_url 完成后再查状态。"
-        return result
-    login_token = data.get("token") or data.get("lgToken") or data.get("loginToken")
-    if login_token:
-        login_resp = await client.post(
-            f"{PASSPORT_BASE}/login_token/login.do",
-            params={
-                "token": login_token,
-                "subFlow": "DIALOG_CHECK_LOGIN_RPC",
-                "nextCode": "0018",
-                "bizScene": "qrcode",
-                "confirm": "true",
-            },
-            data={"deviceId": _cookie_value("cna")},
-            headers=_passport_headers(),
-            follow_redirects=True,
-        )
-        _ingest_response_cookies(login_resp)
-    _promote_cookies_to_goofish()
-    await init_h5tk()
-    try:
-        user = await fetch_login_user()
-    except Exception as exc:
-        persist_login()
-        snapshot = login_snapshot()
-        result["logged_in"] = bool(snapshot.get("logged_in"))
-        result["warning"] = str(exc)
-        result["user"] = snapshot
-        result["hint"] = (
-            "已确认登录，但拉取用户信息失败。"
-            if result["logged_in"]
-            else "已确认，但还没拿到登录 Cookie。请再轮询一次；仍失败请改用 Cookie 登录。"
-        )
-        if result["logged_in"]:
-            session["login_result"] = result
-        return result
-    persist_login(user)
-    result["logged_in"] = True
-    result["user"] = user
-    result["hint"] = "登录成功，可用 GET /auth/status 查看。"
-    session["login_result"] = result
-    return result
 
 
 async def search(keyword: str, page: int = 1):

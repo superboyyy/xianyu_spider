@@ -97,7 +97,7 @@ curl 'http://localhost:8000/auth/qr/status?session_id=返回的session_id'
 
 1. 扫码后必须在闲鱼 App 点「确认登录」。接口里的 `SCANED` / `scanned` 只表示已扫码，还不是已登录。
 2. 请轮询 `GET /auth/qr/status?session_id=...` 直到 `logged_in: true`。只刷新 `GET /auth/status` 看不到扫码进度。
-3. 若返回 `verification_required`，需要打开 `verification_url` 完成手机验证。
+3. 若返回 `verification_required`，打开 `verification_url` 完成手机验证后，**继续轮询同一个 `session_id`**，不要重新 `POST /auth/qr/start`。验证完官方会把二维码标成过期，服务会用确认时保存的 token 换登录态。
 4. 更稳的方式：网页登录后复制完整 Cookie，调用 `POST /auth/cookie`。
 
 ## 自动回复与通知
