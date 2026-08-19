@@ -20,6 +20,7 @@ from xianyu.protocol import (
     normalize_qr_status,
     parse_cookie_header,
     passport_flag,
+    qr_ascii,
     qr_png_base64,
     qr_status_hint,
 )
@@ -506,6 +507,7 @@ def _pending_verify_payload(session_id: str, session: dict) -> dict:
         "logged_in": False,
         "verification_url": verify_url,
         "verification_qr_image_base64": _verification_qr(session),
+        "verification_qr_ascii": qr_ascii(str(verify_url or "")),
         "continue_url": continue_url,
         "cookie_login": "POST /auth/cookie",
         "debug": _login_debug(session),
@@ -746,12 +748,14 @@ async def start_qr_login() -> dict:
         "code_content": code_content,
     }
     _save_qr_sessions()
-    qr_image = qr_png_base64(_qr_sessions[session_id]["code_content"])
+    qr_content = _qr_sessions[session_id]["code_content"]
+    qr_image = qr_png_base64(qr_content)
     return {
         "session_id": session_id,
         "status": "NEW",
-        "qr_content": _qr_sessions[session_id]["code_content"],
+        "qr_content": qr_content,
         "qr_image_base64": qr_image,
+        "qr_ascii": qr_ascii(qr_content),
         "message": (
             "请用闲鱼 App 扫码，并在手机上点「确认登录」；"
             "然后轮询 GET /auth/qr/status?session_id=... 直到 logged_in=true。"
@@ -887,11 +891,24 @@ def qr_continue_context(session_id: str) -> dict:
         "logged_in": bool(snapshot.get("logged_in") or (session.get("login_result") or {}).get("logged_in")),
         "verification_url": session.get("verification_url") or "",
         "verification_qr_image_base64": _verification_qr(session),
+        "verification_qr_ascii": qr_ascii(str(session.get("verification_url") or "")),
         "user_id": snapshot.get("user_id") or "",
         "status": session.get("status") or "",
         "debug": _login_debug(session),
         "browser_job": browser_job(session_id),
     }
+
+
+def qr_text_for_session(session_id: str) -> str:
+    """当前应扫描的登录码或验证链接，画成终端文本二维码。"""
+    session = _qr_sessions.get(session_id)
+    if not session:
+        raise KeyError("二维码会话不存在或已过期，请重新生成")
+    content = str(session.get("verification_url") or session.get("code_content") or "").strip()
+    text = qr_ascii(content)
+    if not text:
+        raise KeyError("当前没有可显示的二维码")
+    return text
 
 
 async def search(keyword: str, page: int = 1):

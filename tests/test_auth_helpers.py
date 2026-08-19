@@ -6,6 +6,7 @@ from xianyu.protocol import (
     is_qr_confirmed,
     is_risk_verify_url,
     normalize_qr_status,
+    qr_ascii,
     qr_png_base64,
     qr_status_hint,
 )
@@ -64,6 +65,13 @@ def test_qr_png_base64_from_verify_url():
     import base64
 
     assert base64.b64decode(raw)[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+
+def test_qr_ascii_from_verify_url():
+    text = qr_ascii("https://passport.goofish.com/iv/verify.htm")
+    assert "\n" in text
+    assert len(text) > 50
 
 
 def test_import_playwright_cookies_sets_unb():

@@ -41,6 +41,14 @@ python spider.py
 
 打开 `http://localhost:8000/docs`。
 
+终端扫码登录（直接在命令行画出二维码）：
+
+```bash
+python spider.py login
+```
+
+用闲鱼 App 扫终端里的码并点确认。若还要二次验证，终端会再画出验证二维码，请用 App 内「扫一扫」。
+
 ## 测试
 
 ```bash
@@ -61,9 +69,10 @@ RUN_LIVE=1 pytest tests/test_live_search.py
 ## 目录结构
 
 ```
-spider.py                 # 启动入口：python spider.py
+spider.py                 # 启动入口：python spider.py / python spider.py login
 xianyu/
   app.py                  # FastAPI 组装
+  cli.py                  # 终端扫码登录（ASCII 二维码）
   mtop.py                 # 闲鱼 mtop HTTP（搜索/登录/IM Token）
   protocol.py             # Cookie 与 IM 推送解析、自动回复匹配
   im_client.py            # IM WebSocket
@@ -84,11 +93,18 @@ curl -X POST http://localhost:8000/auth/cookie \
   -d '{"cookie":"unb=xxxx; cookie2=xxxx; _m_h5_tk=xxxx; ..."}'
 ```
 
-或扫码：
+或在终端扫码（推荐）：
 
 ```bash
-curl -X POST http://localhost:8000/auth/qr/start
+python spider.py login
+```
+
+也可以自己调接口。`POST /auth/qr/start` 会返回 `qr_ascii`，可直接在终端打印：
+
+```bash
+curl -s -X POST http://localhost:8000/auth/qr/start | python -c 'import sys,json; print(json.load(sys.stdin)["qr_ascii"])'
 curl 'http://localhost:8000/auth/qr/status?session_id=返回的session_id'
+# 或：curl 'http://localhost:8000/auth/qr/text?session_id=返回的session_id'
 ```
 
 `GET /auth/status` 可检查是否仍登录。登录态会写入 `data/session.json`。
@@ -97,7 +113,7 @@ curl 'http://localhost:8000/auth/qr/status?session_id=返回的session_id'
 
 1. 扫码后必须在闲鱼 App 点「确认登录」。接口里的 `SCANED` / `scanned` 只表示已扫码，还不是已登录。
 2. 请轮询 `GET /auth/qr/status?session_id=...` 直到 `logged_in: true`。只刷新 `GET /auth/status` 看不到扫码进度。
-3. 若返回 `verification_required`：接口会把验证链接画成 `verification_qr_image_base64`。用**闲鱼 App 内的「扫一扫」**扫这个验证二维码（不要用系统相机），在手机里完成验证，然后继续轮询同一个 `session_id`。也可以打开 `continue_url` 看大图。不要重新 `POST /auth/qr/start`。
+3. 若返回 `verification_required`：接口会把验证链接画成 `verification_qr_ascii` / `verification_qr_image_base64`。用**闲鱼 App 内的「扫一扫」**扫这个验证二维码（不要用系统相机），在手机里完成验证，然后继续轮询同一个 `session_id`。`python spider.py login` 会直接在终端刷新验证码。也可以打开 `continue_url` 看大图。不要重新 `POST /auth/qr/start`。
 4. 扫不了验证码时，再在 continue 页用本机浏览器完成，或把网页 Cookie 贴到 `POST /auth/cookie`。
 
 ## 自动回复与通知

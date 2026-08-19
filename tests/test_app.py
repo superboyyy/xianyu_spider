@@ -124,3 +124,23 @@ def test_qr_browser_starts_without_launching_chrome(monkeypatch):
         assert status.status_code == 200
         assert status.json()["status"] in {"running", "done", "error"}
     logout()
+
+
+def test_qr_text_endpoint_prints_ascii():
+    from xianyu import mtop
+
+    logout()
+    mtop._qr_sessions["txt1"] = {
+        "t": "1",
+        "ck": "2",
+        "code_content": "https://qr.goofish.com/s?k=login",
+    }
+    with _client() as client:
+        missing = client.get("/auth/qr/text", params={"session_id": "missing"})
+        assert missing.status_code == 404
+        res = client.get("/auth/qr/text", params={"session_id": "txt1"})
+        assert res.status_code == 200
+        assert "text/plain" in res.headers.get("content-type", "")
+        assert len(res.text) > 50
+    logout()
+

@@ -2,7 +2,7 @@ import json
 from html import escape
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from xianyu.im_worker import im_service
 from xianyu import mtop as mtop_mod
@@ -13,6 +13,7 @@ from xianyu.mtop import (
     logout,
     poll_qr_login,
     qr_continue_context,
+    qr_text_for_session,
     start_qr_login,
 )
 from xianyu.qr_browser import browser_job, start_browser_verify
@@ -47,6 +48,14 @@ async def auth_qr_status(session_id: str = Query(..., description="start 接口�
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"查询扫码状态失败: {exc}") from exc
+
+
+@router.get("/qr/text", summary="当前登录/验证二维码（终端文本）")
+async def auth_qr_text(session_id: str = Query(..., description="start 接口返回的 session_id")):
+    try:
+        return PlainTextResponse(qr_text_for_session(session_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/qr/continue", summary="扫码后手机验证说明页", response_class=HTMLResponse)

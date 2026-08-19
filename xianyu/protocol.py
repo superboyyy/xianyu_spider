@@ -213,26 +213,49 @@ def qr_status_hint(status: str) -> str:
     return hints.get(mapped, f"当前状态: {mapped}")
 
 
-def qr_png_base64(content: str) -> str:
-    """把任意文本（登录码或验证链接）画成 PNG 二维码。"""
+def _qr_code(content: str, *, border: int = 2):
+    import qrcode
+
     text = (content or "").strip()
     if not text:
-        return ""
-    try:
-        import io
-        import qrcode
+        return None
+    qr = qrcode.QRCode(
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        box_size=8,
+        border=border,
+    )
+    qr.add_data(text)
+    qr.make(fit=True)
+    return qr
 
-        qr = qrcode.QRCode(
-            error_correction=qrcode.constants.ERROR_CORRECT_L,
-            box_size=8,
-            border=2,
-        )
-        qr.add_data(text)
-        qr.make(fit=True)
+
+def qr_png_base64(content: str) -> str:
+    """把任意文本（登录码或验证链接）画成 PNG 二维码。"""
+    try:
+        qr = _qr_code(content, border=2)
+        if qr is None:
+            return ""
+        import io
+
         image = qr.make_image(fill_color="black", back_color="white")
         buffer = io.BytesIO()
         image.save(buffer, format="PNG")
         return base64.b64encode(buffer.getvalue()).decode("ascii")
+    except Exception:
+        return ""
+
+
+def qr_ascii(content: str, *, invert: bool = True) -> str:
+    """把任意文本画成终端可扫描的 Unicode 二维码。invert=True 适合深色背景。"""
+    try:
+        qr = _qr_code(content, border=1)
+        if qr is None:
+            return ""
+        import io
+
+        buffer = io.StringIO()
+        qr.print_ascii(out=buffer, invert=invert)
+        return buffer.getvalue().rstrip() + "\n"
     except Exception:
         return ""
 
