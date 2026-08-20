@@ -10,6 +10,7 @@
 - 🔍 关键词商品搜索（支持分页、排序、价格和地区筛选）
 - ⚡ 异步高性能爬取（HTTP 直连搜索接口，默认按最新发布排序）
 - 🔐 支持扫码登录和扫脸认证；登录失效后搜索按未登录继续
+- 💬 登录后可连接闲鱼私信：收发文本、本地会话历史、SSE
 - 🛡️ 智能数据去重（基于链接特征哈希值）
 - 💾 数据持久化存储（关系数据库）
 - 📊 返回新增记录统计信息，以及当前是否登录态
@@ -63,6 +64,28 @@ python spider.py login --browser   # 直接打开官方登录页
 登录态保存在 `data/session.json`。`GET /auth/status` 会向闲鱼确认 Cookie 是否仍有效；失效则显示未登录。
 
 已登录 Cookie 失效后，搜索仍按未登录继续（HTTP 200，`logged_in: false`，并带 `login_expired`）。需要登录的接口会 401，请重新运行 `python spider.py login`。
+
+### 私信（第一步）
+
+登录后启动 API，再打开闲鱼 IM 长连接。本仓库只做收发和本地历史，不接 Bot、不自动回复。
+
+```bash
+python spider.py login
+python spider.py
+```
+
+```bash
+curl -X POST http://127.0.0.1:8000/im/start
+curl http://127.0.0.1:8000/im/status
+curl http://127.0.0.1:8000/im/conversations
+curl 'http://127.0.0.1:8000/im/messages?conversation_id=对方id'
+curl -X POST http://127.0.0.1:8000/im/send \
+  -H 'Content-Type: application/json' \
+  -d '{"conversation_id":"对方id","to_user_id":"对方id","text":"在的"}'
+curl -N http://127.0.0.1:8000/im/events   # SSE：message.received / message.sent
+```
+
+未登录 `POST /im/start`、`POST /im/send` 返回 401。未 `start` 就发送返回 409。历史来自本机数据库，只覆盖进程连上之后收到/发出的文本。
 
 ### 搜索
 

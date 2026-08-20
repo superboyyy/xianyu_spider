@@ -37,6 +37,8 @@ BASE_URL = "https://h5api.m.goofish.com/h5/{}/1.0/"
 APPKEY = "34839810"
 PASSPORT_BASE = "https://passport.goofish.com"
 LOGIN_USER_API = "mtop.taobao.idlemessage.pc.loginuser.get"
+IM_TOKEN_API = "mtop.taobao.idlemessage.pc.login.token"
+IM_APP_KEY = "444e9908a51d1cb236a27862abc769c9"
 
 client = httpx.AsyncClient(timeout=20.0)
 SEARCH_API = "mtop.taobao.idlemtopsearch.pc.search"
@@ -328,6 +330,40 @@ async def fetch_login_user() -> dict:
     _user_info = result.get("data") or {}
     persist_login(_user_info)
     return _user_info
+
+
+def cookie_header() -> str:
+    return dump_cookie_header(current_cookies())
+
+
+def get_device_id() -> str:
+    return _device_id or ""
+
+
+async def fetch_im_token(device_id: Optional[str] = None) -> dict:
+    """用当前登录 Cookie 换 IM accessToken，供 WebSocket 注册。"""
+    global _device_id
+    user_id = cookie_user_id(current_cookies())
+    _device_id = device_id or _device_id or f"{uuid.uuid4()}-{user_id or '0'}"
+    result = await mtop_request(
+        IM_TOKEN_API,
+        {"appKey": IM_APP_KEY, "deviceId": _device_id},
+        spm_cnt="a21ybx.im.0.0",
+        spm_pre="a21ybx.im.0.0",
+    )
+    if not _mtop_ok(result):
+        raise RuntimeError(f"获取 IM Token 失败: {result.get('ret')}")
+    data = result.get("data") or {}
+    token = str(data.get("accessToken") or data.get("access_token") or "")
+    if not token:
+        raise RuntimeError("IM accessToken 为空，请确认已登录")
+    persist_login()
+    return {
+        "access_token": token,
+        "device_id": _device_id,
+        "user_id": str(data.get("userId") or data.get("user_id") or user_id or ""),
+        "raw": data,
+    }
 
 
 LOGIN_EXPIRED_HINT = (
