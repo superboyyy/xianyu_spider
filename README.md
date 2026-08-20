@@ -142,6 +142,10 @@ print(response.json())
 - 调整数据库连接池配置（`pool_recycle`等参数）
 - 建议生产环境部署时增加 Redis 缓存层
 
+## 交流与贡献
+
+欢迎贡献，也欢迎友善交流：https://t.me/+fHzEZCAdSwA0NTZl
+
 ## 版权声明
 
 本项目采用 [MIT License](LICENSE)，请合理使用并注明出处。数据抓取结果不得用于商业用途。
