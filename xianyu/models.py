@@ -14,3 +14,18 @@ class XianyuProduct(Model):
 
     class Meta:
         table = "xianyu_products"
+
+
+class ChatMessage(Model):
+    id = fields.IntField(pk=True)
+    conversation_id = fields.CharField(max_length=128, db_index=True, description="会话 ID")
+    sender_id = fields.CharField(max_length=64, default="", description="发送者 ID")
+    sender_name = fields.CharField(max_length=128, default="", description="发送者昵称")
+    text = fields.TextField(description="文本内容")
+    direction = fields.CharField(max_length=8, default="in", description="in / out")
+    source = fields.CharField(max_length=16, default="", description="user / gateway，给 agent 对账")
+    raw_json = fields.TextField(null=True, description="原始推送")
+    created_at = fields.DatetimeField(auto_now_add=True, description="入库时间")
+
+    class Meta:
+        table = "im_messages"

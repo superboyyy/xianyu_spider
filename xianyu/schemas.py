@@ -9,6 +9,13 @@ class CookieLoginBody(BaseModel):
     cookie: str = Field(..., description="浏览器登录闲鱼后复制的完整 Cookie")
 
 
+class SendMessageBody(BaseModel):
+    conversation_id: str = Field(..., description="会话 ID，可带或不带 @goofish")
+    to_user_id: str = Field(..., description="对方闲鱼 user id")
+    text: str = Field(..., min_length=1, description="文本")
+    source: str = Field("user", description="user 或 agent，仅作记录")
+
+
 class QrCallbackBody(BaseModel):
     session_id: str = Field(..., description="start 接口返回的 session_id")
     url: str = Field(..., description="浏览器地址栏的 ivCheckLogin.htm 完整链接")
