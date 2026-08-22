@@ -85,7 +85,7 @@ curl -X POST http://127.0.0.1:8000/im/send \
 curl -N http://127.0.0.1:8000/im/events   # SSE：message.received / message.sent
 ```
 
-未登录 `POST /im/start`、`POST /im/send` 返回 401。未 `start` 就发送返回 409。历史来自本机数据库，只覆盖进程连上之后收到/发出的文本。
+未登录 `POST /im/start`、`POST /im/send` 返回 401。未 `start` 就发送返回 409。历史来自本机数据库，只覆盖进程连上之后收到/发出的文本。不要和网页版 IM 同时开（token 会互踢）。`GET /im/status` 里 `ws_frames` / `sync_pushes` / `parsed` 用来区分「没推到」和「推到了但没解开」：`parsed=0` 且 `sync_pushes>0` 是解码问题；`ws_frames=0` 则是连接上了但服务端没推帧。
 
 ### 搜索
 

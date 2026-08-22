@@ -42,12 +42,25 @@ class IMService:
         self._seen: set[str] = set()
 
     def status(self) -> dict[str, Any]:
+        stats = {
+            "ws_frames": 0,
+            "sync_pushes": 0,
+            "parsed": 0,
+            "last_lwp": "",
+            "last_decode_error": "",
+        }
+        client = self.client
+        if client is not None:
+            for key in stats:
+                if hasattr(client, key):
+                    stats[key] = getattr(client, key)
         return {
             "running": self.running,
             "connected": bool(self.connected and self.client),
             "user_id": self.user_id,
             "last_error": self.last_error,
             "subscribers": len(self._subscribers),
+            **stats,
         }
 
     def subscribe(self) -> asyncio.Queue:

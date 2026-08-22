@@ -80,6 +80,11 @@ def test_im_start_send_and_history(monkeypatch):
             body = started.json()
             assert body["running"] is True
             assert body["connected"] is True
+            assert "ws_frames" in body
+            assert "sync_pushes" in body
+            assert "parsed" in body
+            assert "last_lwp" in body
+            assert "last_decode_error" in body
 
             sent = client.post(
                 "/im/send",

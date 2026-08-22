@@ -12,6 +12,8 @@ from typing import Any, AsyncIterator, Optional
 import websockets
 
 from xianyu.im_protocol import (
+    _looks_like_base64,
+    decode_payload,
     extract_incoming_message,
     generate_mid,
     generate_uuid,
@@ -24,9 +26,31 @@ logger = logging.getLogger(__name__)
 WS_URL = "wss://wss-goofish.dingtalk.com/"
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 DingTalk(2.1.5) "
-    "OS(Windows/10) Browser(Chrome/120.0.0.0) DingWeb/2.1.5 IMPaaS DingWeb/2.1.5"
+    "(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 DingTalk(2.1.5) "
+    "OS(Windows/10) Browser(Chrome/133.0.0.0) DingWeb/2.1.5 IMPaaS DingWeb/2.1.5"
 )
+
+
+def parse_ws_frame(raw: Any) -> Optional[dict]:
+    if isinstance(raw, bytearray):
+        raw = bytes(raw)
+    if isinstance(raw, bytes):
+        try:
+            raw = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        message = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return message if isinstance(message, dict) else None
 
 
 class GoofishIMClient:
@@ -36,9 +60,15 @@ class GoofishIMClient:
         self.device_id = ""
         self.user_id = ""
         self.connected = False
+        self.ws_frames = 0
+        self.sync_pushes = 0
+        self.parsed = 0
+        self.last_lwp = ""
+        self.last_decode_error = ""
         self._incoming: asyncio.Queue = asyncio.Queue()
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._reader_task: Optional[asyncio.Task] = None
+        self._pending: dict[str, asyncio.Future] = {}
 
     async def connect(self) -> dict:
         token_info = await fetch_im_token()
@@ -69,6 +99,7 @@ class GoofishIMClient:
 
     async def close(self) -> None:
         self.connected = False
+        self._fail_pending(RuntimeError("IM 已断开"))
         for task in (self._heartbeat_task, self._reader_task):
             if task:
                 task.cancel()
@@ -134,7 +165,7 @@ class GoofishIMClient:
             "sync": "0,0;0;0;",
             "did": self.device_id,
         }
-        await self._send_lwp("/reg", headers=headers)
+        await self._send_lwp("/reg", headers=headers, wait=3.0)
 
     async def _ack_diff(self) -> None:
         now = int(time.time() * 1000)
@@ -161,32 +192,72 @@ class GoofishIMClient:
                 return
             await asyncio.sleep(15)
 
-    async def _send_lwp(self, lwp: str, body: Any = None, headers: Optional[dict] = None) -> str:
+    async def _send_lwp(
+        self,
+        lwp: str,
+        body: Any = None,
+        headers: Optional[dict] = None,
+        wait: Optional[float] = None,
+    ) -> Optional[Any]:
         if self.ws is None:
             raise RuntimeError("IM 未连接")
         mid = generate_mid()
         message = {"lwp": lwp, "headers": {"mid": mid, **(headers or {})}}
         if body is not None:
             message["body"] = body
+        fut: Optional[asyncio.Future] = None
+        if wait:
+            fut = asyncio.get_running_loop().create_future()
+            self._pending[mid] = fut
         await self.ws.send(json.dumps(message, ensure_ascii=False, separators=(",", ":")))
-        return mid
+        if fut is None:
+            return mid
+        try:
+            return await asyncio.wait_for(fut, timeout=wait)
+        except asyncio.TimeoutError:
+            logger.warning("IM %s 等待响应超时，继续", lwp)
+            return None
+        finally:
+            self._pending.pop(mid, None)
+
+    def _resolve_pending(self, message: dict) -> None:
+        headers = message.get("headers") or {}
+        mid = headers.get("mid")
+        if not mid:
+            return
+        fut = self._pending.get(mid)
+        if fut and not fut.done():
+            fut.set_result(message)
+
+    def _fail_pending(self, exc: Exception) -> None:
+        for fut in list(self._pending.values()):
+            if not fut.done():
+                fut.set_exception(exc)
+        self._pending.clear()
 
     async def _read_loop(self) -> None:
         assert self.ws is not None
         try:
             async for raw in self.ws:
-                try:
-                    message = json.loads(raw)
-                except json.JSONDecodeError:
+                self.ws_frames += 1
+                message = parse_ws_frame(raw)
+                if message is None:
+                    self.last_decode_error = "WebSocket 帧不是 JSON"
                     continue
-                await self._ack(message)
                 lwp = str(message.get("lwp") or "")
+                if lwp:
+                    self.last_lwp = lwp
+                self._resolve_pending(message)
+                await self._ack(message)
                 dumped = json.dumps(message, ensure_ascii=False)
                 if lwp in {"/s/sync", "/s/pre"} or "syncPushPackage" in dumped:
-                    await self._handle_sync(message)
+                    self.sync_pushes += 1
+                    added = await self._handle_sync(message)
+                    self.parsed += added
         except Exception as exc:
             logger.warning("IM 读取中断: %s", exc)
             self.connected = False
+            self._fail_pending(exc if isinstance(exc, Exception) else RuntimeError(str(exc)))
             try:
                 self._incoming.put_nowait(None)
             except Exception:
@@ -208,11 +279,18 @@ class GoofishIMClient:
                 ack["headers"][key] = headers[key]
         await self.ws.send(json.dumps(ack, ensure_ascii=False, separators=(",", ":")))
 
-    async def _handle_sync(self, message: dict) -> None:
-        for package in iter_sync_packages(message):
+    async def _handle_sync(self, message: dict) -> int:
+        items = iter_sync_packages(message)
+        if not items:
+            items = [message.get("body")]
+        added = 0
+        for package in items:
             incoming = extract_incoming_message(package)
             if incoming and incoming.get("text"):
                 await self._incoming.put(incoming)
-        fallback = extract_incoming_message(message.get("body"))
-        if fallback and fallback.get("text"):
-            await self._incoming.put(fallback)
+                added += 1
+                continue
+            if isinstance(package, str) and _looks_like_base64(package) and decode_payload(package) is None:
+                self.last_decode_error = "sync 包 MessagePack/JSON 解码失败"
+                logger.warning("IM sync 包解码失败，长度 %s", len(package))
+        return added
