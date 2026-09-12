@@ -1,12 +1,15 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from tortoise.contrib.fastapi import register_tortoise
 
-from xianyu.config import DATABASE_URL
+from xianyu.config import DATABASE_URL, ROOT_DIR
 from xianyu.mtop import init as init_goofish
-from xianyu.routers import auth, im, search
+from xianyu.routers import auth, im, products, search
 
 load_dotenv()
 
@@ -29,13 +32,23 @@ def create_app(*, connect_xianyu: bool = True, db_url: str | None = None) -> Fas
             await im_service.stop()
 
     app = FastAPI(
-        title="闲鱼 HTTP 接口",
-        description="商品搜索 + Cookie/扫码登录 + 闲鱼私信",
+        title="闲鱼工作台",
+        description="本机客户端：搜索、货架、登录、私信。打开 / 即是工作台。",
         lifespan=lifespan,
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
     app.include_router(search.router)
     app.include_router(auth.router)
     app.include_router(im.router)
+    app.include_router(products.router)
+    web_dir = Path(ROOT_DIR) / "web"
+    if web_dir.is_dir():
+        app.mount("/", StaticFiles(directory=web_dir, html=True), name="web")
 
     register_tortoise(
         app,

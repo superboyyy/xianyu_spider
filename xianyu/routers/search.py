@@ -2,6 +2,7 @@ import traceback
 
 from fastapi import APIRouter, HTTPException
 
+from xianyu.catalog import attach_saved_ids, public_from_raw
 from xianyu.mtop import LOGIN_EXPIRED_HINT, probe_login
 from xianyu.schemas import SearchBody
 from xianyu.search import save_to_db, scrape_xianyu_http
@@ -20,8 +21,10 @@ async def search_items(body: SearchBody):
         filters = body.filters()
         data_list = await scrape_xianyu_http(body.keyword, body.max_pages, filters=filters)
         new_count, new_ids = (0, [])
+        items = [public_from_raw(item) for item in data_list]
         if data_list:
             new_count, new_ids = await save_to_db(data_list)
+            items = await attach_saved_ids(items, new_ids)
         payload = {
             "status": "success",
             "keyword": body.keyword,
@@ -31,6 +34,7 @@ async def search_items(body: SearchBody):
             "total_results": len(data_list),
             "new_records": new_count,
             "new_record_ids": new_ids,
+            "items": items,
         }
         if snapshot.get("login_expired"):
             payload["login_expired"] = True

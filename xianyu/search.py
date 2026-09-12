@@ -1,19 +1,20 @@
 import asyncio
-import hashlib
 from datetime import datetime
 
+from xianyu.catalog import link_hash
 from xianyu.models import XianyuProduct
 from xianyu.mtop import search as mtop_search
 from xianyu.search_query import SearchFilters
 
 
 def get_md5(text: str) -> str:
-    return hashlib.md5(text.encode("utf-8")).hexdigest()
+    return link_hash(text)
 
 
 def get_link_unique_key(link: str) -> str:
-    parts = link.split("&", 1)
-    return parts[0] if len(parts) >= 2 else link
+    from xianyu.catalog import link_unique_key
+
+    return link_unique_key(link)
 
 
 async def safe_get(data, *keys, default="暂无"):
@@ -31,9 +32,9 @@ async def save_to_db(data_list):
     for item in data_list:
         try:
             link = item["商品链接"]
-            link_hash = get_md5(get_link_unique_key(link))
+            digest = link_hash(link)
             product, created = await XianyuProduct.get_or_create(
-                link_hash=link_hash,
+                link_hash=digest,
                 defaults={
                     "title": item["商品标题"],
                     "price": item["当前售价"],
@@ -75,19 +76,29 @@ async def handle_data(data: dict):
         raw_link = await safe_get(item, "data", "item", "main", "targetUrl", default="")
         image_url = await safe_get(main_data, "picUrl", default="")
         publish_time = click_params.get("publishTime", "")
+        link = raw_link.replace("fleamarket://", "https://www.goofish.com/")
+        seller_id = (
+            click_params.get("sellerId")
+            or click_params.get("userId")
+            or click_params.get("seller_id")
+            or ""
+        )
+        item_id = click_params.get("itemId") or click_params.get("id") or ""
         res.append(
             {
                 "商品标题": title,
                 "当前售价": price,
                 "发货地区": area,
                 "卖家昵称": seller,
-                "商品链接": raw_link.replace("fleamarket://", "https://www.goofish.com/"),
+                "商品链接": link,
                 "商品图片链接": f"https:{image_url}"
                 if image_url and not image_url.startswith("http")
                 else image_url,
                 "发布时间": datetime.fromtimestamp(int(publish_time) / 1000).strftime("%Y-%m-%d %H:%M")
                 if str(publish_time).isdigit()
                 else "未知时间",
+                "item_id": str(item_id or ""),
+                "seller_id": str(seller_id or ""),
             }
         )
     return res

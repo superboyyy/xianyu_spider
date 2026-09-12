@@ -190,6 +190,7 @@ def test_search_returns_logged_in_false_without_session(monkeypatch):
         assert body["keyword"] == "手机"
         assert body["logged_in"] is False
         assert body["total_results"] == 0
+        assert body["items"] == []
         assert body["filters"]["sort"] == "newest"
 
 
@@ -236,7 +237,66 @@ def test_search_accepts_filters_and_logged_in_cookie(monkeypatch):
         assert body["new_records"] == 1
         assert body["filters"]["sort"] == "price_asc"
         assert body["filters"]["city"] == "深圳"
+        assert body["items"][0]["title"] == "x"
+        assert body["items"][0]["item_id"] == "1"
     logout()
+
+
+def test_search_items_land_on_shelf(monkeypatch):
+    async def fake_scrape(keyword, max_pages=1, filters=None):
+        return [
+            {
+                "商品标题": "旧相机",
+                "当前售价": "¥800",
+                "发货地区": "深圳",
+                "卖家昵称": "店主",
+                "商品链接": "https://www.goofish.com/item?id=99",
+                "商品图片链接": "https://img.example/a.jpg",
+                "发布时间": "2026-01-01 12:00",
+                "seller_id": "88",
+            }
+        ]
+
+    monkeypatch.setattr("xianyu.routers.search.scrape_xianyu_http", fake_scrape)
+    logout()
+    with _client() as client:
+        empty = client.get("/products")
+        assert empty.status_code == 200
+        assert empty.json()["total"] == 0
+
+        res = client.post("/search/", json={"keyword": "相机"})
+        assert res.status_code == 200
+        item = res.json()["items"][0]
+        assert item["title"] == "旧相机"
+        assert item["is_new"] is True
+        assert item["id"]
+        assert item["seller_id"] == "88"
+
+        shelf = client.get("/products", params={"q": "相机"})
+        assert shelf.status_code == 200
+        assert shelf.json()["total"] == 1
+        assert shelf.json()["items"][0]["title"] == "旧相机"
+
+        detail = client.get(f"/products/{item['id']}")
+        assert detail.status_code == 200
+        assert detail.json()["link"].endswith("id=99")
+
+        missing = client.get("/products/999999")
+        assert missing.status_code == 404
+    logout()
+
+
+def test_workbench_is_served():
+    with _client() as client:
+        home = client.get("/")
+        assert home.status_code == 200
+        assert "闲鱼工作台" in home.text
+        css = client.get("/app.css")
+        assert css.status_code == 200
+        assert "brand-mark" in css.text
+        js = client.get("/app.js")
+        assert js.status_code == 200
+        assert "闲鱼工作台" in js.text
 
 
 def test_search_expired_login_continues_anonymously(monkeypatch):

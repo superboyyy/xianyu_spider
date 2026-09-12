@@ -1,19 +1,20 @@
-# 闲鱼商品搜索API
+# 闲鱼工作台
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.68.0-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python)](https://www.python.org/)
 
-基于 FastAPI 构建的闲鱼商品搜索接口，支持异步并发请求和自动化数据去重存储。现已支持登录。
+本机闲鱼客户端：搜货、货架、扫码登录、私信。底层仍是 FastAPI，启动后打开浏览器即可用；命令行和 HTTP 接口也还在。
 
 ## 功能特性
 
+- 🖥️ 本机工作台（搜货 / 货架 / 私信 / 登录），`python spider.py` 后打开 `/`
 - 🔍 关键词商品搜索（支持分页、排序、价格和地区筛选）
 - ⚡ 异步高性能爬取（HTTP 直连搜索接口，默认按最新发布排序）
 - 🔐 支持扫码登录和扫脸认证；登录失效后搜索按未登录继续
 - 💬 登录后可连接闲鱼私信：收发文本、本地会话历史、SSE
 - 🛡️ 智能数据去重（基于链接特征哈希值）
 - 💾 数据持久化存储（关系数据库）
-- 📊 返回新增记录统计信息，以及当前是否登录态
+- 📊 返回商品卡片、新增记录统计，以及当前是否登录态
 
 ## 技术栈
 
@@ -45,6 +46,15 @@ DATABASE_URL=mysql://user:password@localhost/xianyu
 ```bash
 python spider.py
 ```
+
+浏览器打开 [http://127.0.0.1:8000](http://127.0.0.1:8000) 就是工作台：
+
+- **搜货**：关键词、价格、城市、排序；结果直接显示卡片，并写入本机货架
+- **货架**：已经落库的商品，可按标题筛选
+- **私信**：登录后连接闲鱼 IM，收发文本（不要和网页版同时开）
+- **登录**：扫码 / 本机浏览器验证 / 粘贴 Cookie
+
+工作台是这个仓库自己的前端，不依赖其它桌面项目。接口仍可给脚本或其它客户端用。
 
 ### 登录
 
@@ -99,7 +109,7 @@ curl -N http://127.0.0.1:8000/im/events   # SSE：message.received / message.sen
 
 ## API 文档
 
-访问 `http://localhost:8000/docs` 查看交互式文档
+访问 `http://localhost:8000/docs` 查看交互式文档。货架：`GET /products`、`GET /products/{id}`。
 
 ### 搜索接口
 ```
@@ -130,7 +140,22 @@ POST /search/
   "filters": {"sort": "newest", "min_price": 100, "max_price": 2000, "city": "深圳"},
   "total_results": 30,
   "new_records": 5,
-  "new_record_ids": [101,102,103,104,105]
+  "new_record_ids": [101,102,103,104,105],
+  "items": [
+    {
+      "id": 101,
+      "item_id": "123",
+      "title": "手机",
+      "price": "¥800",
+      "area": "深圳",
+      "seller": "店主",
+      "seller_id": "",
+      "link": "https://www.goofish.com/item?id=123",
+      "image_url": "https://example.com/a.jpg",
+      "publish_time": "2026-01-01 12:00",
+      "is_new": true
+    }
+  ]
 }
 ```
 
