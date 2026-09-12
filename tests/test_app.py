@@ -297,6 +297,8 @@ def test_workbench_is_served():
         js = client.get("/app.js")
         assert js.status_code == 200
         assert "闲鱼工作台" in js.text
+        icon = client.get("/favicon.svg")
+        assert icon.status_code == 200
 
 
 def test_search_expired_login_continues_anonymously(monkeypatch):
