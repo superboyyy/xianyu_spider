@@ -1,176 +1,81 @@
-# 闲鱼商品搜索API
+# 闲鱼工作台
 
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.68.0-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python)](https://www.python.org/)
-
-基于 FastAPI 构建的闲鱼商品搜索接口，支持异步并发请求和自动化数据去重存储。现已支持登录。
-
-## 功能特性
-
-- 🔍 关键词商品搜索（支持分页、排序、价格和地区筛选）
-- ⚡ 异步高性能爬取（HTTP 直连搜索接口，默认按最新发布排序）
-- 🔐 支持扫码登录和扫脸认证；登录失效后搜索按未登录继续
-- 💬 登录后可连接闲鱼私信：收发文本、本地会话历史、SSE
-- 🛡️ 智能数据去重（基于链接特征哈希值）
-- 💾 数据持久化存储（关系数据库）
-- 📊 返回新增记录统计信息，以及当前是否登录态
-
-## 技术栈
-
-| 组件           | 用途                     |
-|----------------|--------------------------|
-| FastAPI        | RESTful API框架          |
-| httpx          | 异步 HTTP 搜索 / 登录请求 |
-| Playwright     | 扫脸认证                 |
-| Tortoise ORM   | 异步数据库ORM            |
-| SQL            | 数据持久化存储           |
-| Uvicorn        | ASGI服务器               |
+本机闲鱼引擎 + 液态玻璃 Web 客户端（Vue 3）。支持搜货、货架、盯盘推送、多厂商 AI 问询、私信与草稿自动回复。
 
 ## 快速开始
 
-### 环境配置
-
-1. 安装依赖
 ```bash
 pip install -r requirements.txt
-playwright install chromium   # 扫脸认证需要，安装一次即可
-```
+playwright install chromium   # 扫脸认证需要
 
-2. 创建 `.env` 文件（可选；不配的话默认用 `data/xianyu.sqlite3`）
-```env
-DATABASE_URL=mysql://user:password@localhost/xianyu
-```
+# 前端已构建在 web/；若改了 frontend/ 源码：
+# cd frontend && npm install && npm run build && cp -a dist/. ../web/
 
-### 启动服务
-```bash
 python spider.py
 ```
 
-### 登录
+打开 http://127.0.0.1:8000
+
+| 页面 | 作用 |
+|---|---|
+| 搜货 | 关键词 / 价格 / 城市 |
+| 货架 | 本机落库商品与均价样本 |
+| 盯盘 | 定时搜索；上新 / 目标价 / 低于中位 |
+| AI | 找货、均价、入手判断、起草私信 |
+| 私信 | 闲鱼 IM（勿与网页版同时开） |
+| 自动回复 | 规则命中后只出草稿，不实发 |
+| 通知 | Bark / Webhook / ntfy / Telegram / Server酱 / 企业微信 |
+| 登录 | 扫码 / Cookie |
+| 设置 | 多厂商 AI 与自动回复档位 |
+
+## 通知
+
+在「通知」页添加渠道后，盯盘命中或登录失效会推送，也可点「测试推送」。
+
+| 类型 | Endpoint |
+|---|---|
+| Bark | key 或 `https://api.day.app/{key}` |
+| Webhook | 任意 URL，POST `{title, body, payload}` |
+| ntfy | `https://ntfy.sh/主题` 或 `token 主题` |
+| Telegram | `bot_token\|chat_id` |
+| Server酱 | SendKey |
+| 企业微信 | 机器人 key 或完整 webhook URL |
+
+同一商品 12 小时内不会重复推。登录失效 6 小时内只提醒一次。
+
+## AI
+
+设置里选厂商，或把 Base URL 交给「自动识别」。支持：
+
+OpenAI、DeepSeek、Ollama 本地、Anthropic Claude、Azure OpenAI、Gemini、Groq、OpenRouter、通义千问、Kimi、智谱、硅基流动、Together、MiniMax、零一万物，以及任意 OpenAI 兼容端点。
+
+Ollama 默认不用 Key。其它厂商不配 Key 时，AI 页仍可用本机样本做粗判。价格统计不是全网官方行情。
+
+## 自动回复
+
+设置里只有「关闭 / 草稿」。命中规则后写入草稿日志，并在私信页提示，**不会自动发给对方**。
+
+## 主要 API
+
+- `POST /search/` → 含 `items`
+- `GET /products`、`GET /products/stats?q=`
+- `CRUD /watches`、`POST /watches/{id}/run`
+- `CRUD /notify/channels`、`GET /notify/kinds`、`POST /notify/test`
+- `POST /ai/chat`、`GET /ai/providers`、`GET/PUT /settings`
+- `CRUD /autoreply/rules`
+- 原有 `/auth/*`、`/im/*`
+
+## 开发
 
 ```bash
-python spider.py login
+python spider.py --port 8000
+cd frontend && npm install && npm run dev
 ```
 
-终端会显示登录二维码。扫码确认后，如需扫脸认证会自动打开浏览器完成。
+数据与密钥在 `data/`（已 gitignore）。
 
-也可以：
+## 说明
 
-```bash
-python spider.py login --cookie    # 粘贴已登录网页的 Cookie
-python spider.py login --browser   # 直接打开官方登录页
-```
-
-登录态保存在 `data/session.json`。`GET /auth/status` 会向闲鱼确认 Cookie 是否仍有效；失效则显示未登录。
-
-已登录 Cookie 失效后，搜索仍按未登录继续（HTTP 200，`logged_in: false`，并带 `login_expired`）。需要登录的接口会 401，请重新运行 `python spider.py login`。
-
-### 搜索
-
-```bash
-python spider.py search 手机 --pages 3
-python spider.py search 相机 --sort price_asc --min-price 100 --max-price 800 --city 深圳
-python spider.py search 自行车 --no-save
-```
-
-已登录时会自动带上 `data/session.json`。默认写入数据库；`--no-save` 只打印 JSON。Cookie 失效时搜索不中断，结果里会标明 `login_expired`。
-
-### 私信
-
-登录后启动 API，再打开闲鱼 IM 长连接。
-
-```bash
-python spider.py login
-python spider.py
-```
-
-```bash
-curl -X POST http://127.0.0.1:8000/im/start
-curl http://127.0.0.1:8000/im/status
-curl http://127.0.0.1:8000/im/conversations
-curl 'http://127.0.0.1:8000/im/messages?conversation_id=对方id'
-curl -X POST http://127.0.0.1:8000/im/send \
-  -H 'Content-Type: application/json' \
-  -d '{"conversation_id":"对方id","to_user_id":"对方id","text":"在的"}'
-curl -N http://127.0.0.1:8000/im/events   # SSE：message.received / message.sent
-```
-
-未登录 `POST /im/start`、`POST /im/send` 返回 401。未 `start` 就发送返回 409。历史来自本机数据库，只覆盖进程连上之后收到/发出的文本。不要和网页版 IM 同时开（token 会互踢）。`GET /im/status` 里 `ws_frames` / `sync_pushes` / `parsed` 用来区分「没推到」和「推到了但没解开」：`parsed=0` 且 `sync_pushes>0` 是解码问题；`ws_frames=0` 则是连接上了但服务端没推。
-
-## API 文档
-
-访问 `http://localhost:8000/docs` 查看交互式文档
-
-### 搜索接口
-```
-POST /search/
-```
-
-**请求参数示例**：
-```json
-{
-  "keyword": "手机",
-  "max_pages": 1,
-  "sort": "newest",
-  "min_price": 100,
-  "max_price": 2000,
-  "city": "深圳"
-}
-```
-
-`sort` 可选：`newest`（默认，最新发布）、`price_asc`、`price_desc`、`default`（综合）。
-
-**响应示例**：
-```json
-{
-  "status": "success",
-  "keyword": "手机",
-  "logged_in": false,
-  "user_id": "",
-  "filters": {"sort": "newest", "min_price": 100, "max_price": 2000, "city": "深圳"},
-  "total_results": 30,
-  "new_records": 5,
-  "new_record_ids": [101,102,103,104,105]
-}
-```
-
-## 使用示例
-建议使用 Apifox 或者 Postman 进行测试
-
-### cURL 请求
-```bash
-curl -X POST "http://localhost:8000/search/" \
--H "Content-Type: application/json" \
--d '{"keyword": "笔记本电脑", "max_pages": 2}'
-```
-
-### Python 客户端
-```python
-import requests
-
-response = requests.post(
-    "http://localhost:8000/search/",
-    json={"keyword": "数码相机", "max_pages": 3}
-)
-print(response.json())
-```
-
-## 注意事项
-
-1. **法律合规**  
-使用前请确保遵守《网络安全法》和闲鱼平台 Robots 协议，本代码仅用于学习研究
-
-2. **反爬机制**  
-建议配置代理 IP 池和随机请求间隔，默认配置可能触发反爬限制
-
-3. **性能调优**  
-- 调整数据库连接池配置（`pool_recycle`等参数）
-- 建议生产环境部署时增加 Redis 缓存层
-
-## 交流与贡献
-
-欢迎贡献，也欢迎友善交流：https://t.me/+fHzEZCAdSwA0NTZl
-
-## 版权声明
-
-本项目采用 [MIT License](LICENSE)，请合理使用并注明出处。数据抓取结果不得用于商业用途。
+- 引擎单机常开；以后手机壳只连这台引擎。
+- 价格统计基于本机样本。
+- 仅供学习研究，请遵守闲鱼与当地法规。
