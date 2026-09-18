@@ -1,4 +1,4 @@
-"""IM 长连接管家：收发、入库、SSE。不接 webhook / 自动回复。"""
+"""IM 长连接管家：收发、入库、SSE。自动回复由 autoreply pipeline 可选接入。"""
 
 from __future__ import annotations
 
@@ -211,6 +211,21 @@ class IMService:
             source="gateway",
         )
         await self._publish({"event": "message.received", **_row_payload(row)})
+        if direction == "in":
+            try:
+                from xianyu.autoreply.service import maybe_autoreply
+
+                result = await maybe_autoreply(
+                    {
+                        "conversation_id": cid,
+                        "sender_id": sender,
+                        "text": text,
+                    }
+                )
+                if result:
+                    await self._publish({"event": "autoreply", **result})
+            except Exception:
+                logger.exception("自动回复处理失败")
 
     async def _store(self, incoming: dict, *, direction: str, source: str) -> ChatMessage:
         return await ChatMessage.create(

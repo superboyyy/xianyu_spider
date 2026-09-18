@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -13,7 +13,7 @@ class SendMessageBody(BaseModel):
     conversation_id: str = Field(..., description="会话 ID，可带或不带 @goofish")
     to_user_id: str = Field(..., description="对方闲鱼 user id")
     text: str = Field(..., min_length=1, description="文本")
-    source: str = Field("user", description="user 或 agent，仅作记录")
+    source: str = Field("user", description="user / agent / rule / ai")
 
 
 class QrCallbackBody(BaseModel):
@@ -50,3 +50,78 @@ class SearchBody(BaseModel):
             city=self.city,
             publish_days=self.publish_days,
         )
+
+
+class WatchBody(BaseModel):
+    name: str = ""
+    keyword: str = Field(..., min_length=1)
+    sort: str = "newest"
+    min_price: Optional[int] = None
+    max_price: Optional[int] = None
+    city: Optional[str] = None
+    province: Optional[str] = None
+    publish_days: Optional[int] = None
+    max_pages: int = Field(1, ge=1, le=10)
+    interval_minutes: int = Field(15, ge=1, le=24 * 60)
+    enabled: bool = True
+    notify_new: bool = True
+    notify_below_target: bool = True
+    target_price: Optional[float] = None
+    notify_below_median_pct: Optional[float] = Field(None, ge=0, le=90)
+
+
+class NotifyChannelBody(BaseModel):
+    name: str = "Bark"
+    kind: str = Field("bark", description="bark / webhook")
+    endpoint: str = Field(..., min_length=1)
+    enabled: bool = True
+
+
+class NotifyTestBody(BaseModel):
+    title: str = "闲鱼工作台"
+    body: str = "测试推送"
+
+
+class SettingsBody(BaseModel):
+    autoreply_mode: Optional[str] = None
+    ai_base_url: Optional[str] = None
+    ai_model: Optional[str] = None
+    ai_api_key: Optional[str] = None
+
+
+class AiChatBody(BaseModel):
+    message: str = Field(..., min_length=1)
+    thread_id: Optional[int] = None
+
+
+class AutoreplyRuleBody(BaseModel):
+    name: str = ""
+    enabled: bool = True
+    match_text: str = Field(..., min_length=1)
+    reply_text: str = Field(..., min_length=1)
+    cooldown_seconds: int = Field(300, ge=0)
+    only_first: bool = False
+
+
+def watch_to_dict(row: Any) -> dict:
+    return {
+        "id": row.id,
+        "name": row.name,
+        "keyword": row.keyword,
+        "sort": row.sort,
+        "min_price": row.min_price,
+        "max_price": row.max_price,
+        "city": row.city,
+        "province": row.province,
+        "publish_days": row.publish_days,
+        "max_pages": row.max_pages,
+        "interval_minutes": row.interval_minutes,
+        "enabled": row.enabled,
+        "notify_new": row.notify_new,
+        "notify_below_target": row.notify_below_target,
+        "target_price": row.target_price,
+        "notify_below_median_pct": row.notify_below_median_pct,
+        "last_run_at": row.last_run_at.isoformat() if row.last_run_at else None,
+        "last_error": row.last_error,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
