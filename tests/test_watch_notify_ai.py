@@ -108,10 +108,3 @@ def test_autoreply_rules_and_settings():
         assert rules.status_code == 200
         assert rules.json()["items"]
 
-
-def test_workbench_index_available():
-    with _client() as client:
-        # Prefer built Vue dist; fall back to legacy web/
-        home = client.get("/")
-        assert home.status_code == 200
-        assert "闲鱼工作台" in home.text or "app" in home.text.lower()

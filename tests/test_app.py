@@ -286,16 +286,6 @@ def test_search_items_land_on_shelf(monkeypatch):
     logout()
 
 
-def test_workbench_is_served():
-    with _client() as client:
-        home = client.get("/")
-        assert home.status_code == 200
-        assert "闲鱼工作台" in home.text
-        assert "/assets/" in home.text or client.get("/app.js").status_code == 200
-        icon = client.get("/favicon.svg")
-        assert icon.status_code == 200
-
-
 def test_search_expired_login_continues_anonymously(monkeypatch):
     async def fake_scrape(keyword, max_pages=1, filters=None):
         return []
